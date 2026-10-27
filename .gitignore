@@ -1,0 +1,37 @@
+# 소스와 프로젝트 설정만 추적한다. 나머지 로컬 파일은 그대로 보관한다.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/portable-layout.json
+
+!/source/
+!/source/**/
+!/source/**/*.cs
+!/source/**/*.csproj
+!/source/**/*.js
+!/source/**/*.html
+!/source/**/*.css
+
+!/tools/
+!/tools/Test-Source.ps1
+!/analysis/
+/analysis/*
+!/analysis/tests/
+/analysis/tests/*
+!/analysis/tests/nightmare-strategy-portable-regression.test.cjs
+
+# 빌드·복원 산출물과 로컬 편집기 설정
+**/bin/
+**/obj/
+**/artifacts/
+**/.vs/
+**/*.user
+**/*.suo
+**/node_modules/
+
+# 실행용 데이터·아이콘·추천 snapshot은 서버 전환 전까지 로컬에서 관리한다.
+**/wwwroot/data/
+**/wwwroot/assets/
+**/wwwroot/nightmare-records-live-*.json
+**/wwwroot/nightmare-records-live-manifest.json

@@ -1,0 +1,9 @@
+{
+  "formatVersion": 1,
+  "name": "원랜디 도우미",
+  "serverRelativePath": "app/server/OrdUnitProbe.exe",
+  "catalogRelativePath": "data/unit_catalog_2.323C.json",
+  "profileRelativePath": "state/webview-profile",
+  "logsRelativePath": "logs",
+  "port": 8765
+}
