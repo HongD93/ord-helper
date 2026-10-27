@@ -57,7 +57,7 @@
       recordPollTimer=setInterval(pollLiveRecords,20000);pollLiveRecords();
     }
     const panel = root.OrdNightmarePanel.create({
-      host:options.host, onOpenUnit:options.onOpenUnit, onShowRecipe:options.onShowRecipe,
+      host:options.host, onOpenUnit:options.onOpenUnit, onShowRecipe:options.onShowRecipe, formatUnitName:options.formatUnitName,
       onStopCraft:()=>{if(state?.craftRunning&&state?.capabilities?.stopCraftSupported===true)return options.onStopCraft?.();},
       onCraftTarget:(code,goalRawcode,origin)=>{
         if(!connected()||state?.craftRunning||recordUpdateInFlight||pendingRecordsSnapshot||(busy||pending)&&blockingRecompute||state?.capabilities?.protectedCountsSupported!==true||state?.capabilities?.exactPlanSupported!==true)return;

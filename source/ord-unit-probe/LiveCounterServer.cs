@@ -17,11 +17,17 @@ static class LiveCounterServer
         Action<Exception, string>? warning = null, GameRunRecorder? runRecorder = null)
     {
         private Publication current = new(0, "{\"status\":\"connecting\"}");
+        private readonly CraftSnapshotSignal snapshotSignal = new();
         private string lastRecordedState = "";
         private DateTimeOffset nextWarning;
 
         public Publication Current => Volatile.Read(ref current);
-        public void SetCurrent(Publication publication) => Volatile.Write(ref current, publication);
+        public void SetCurrent(Publication publication)
+        {
+            Volatile.Write(ref current, publication);
+            snapshotSignal.Publish(publication.Sequence);
+        }
+        internal Task WaitForNewerAsync(long sequence, CancellationToken cancel) => snapshotSignal.WaitAsync(sequence, cancel);
 
         public async Task PublishAsync(Publication publication, JsonObject payload, CancellationToken cancel)
         {
@@ -100,6 +106,7 @@ static class LiveCounterServer
         builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
         await using var app = builder.Build();
         var sequence = 0L;
+        var activeCraft = 0;
         var outputPath = output is null ? null : Path.GetFullPath(output);
         var runRecorder = outputPath is null ? null : new GameRunRecorder(RunDataDirectory(outputPath),
             (error, destination) => app.Logger.LogWarning(error, "Run {Destination} file is unavailable; the next sample retries.", destination));
@@ -129,7 +136,9 @@ static class LiveCounterServer
         app.MapGet("/api/snapshot", () => Results.Text(publications.Current.Json, "application/json", Encoding.UTF8));
         var dataDirectory = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data");
         var crafting = new GameCraftService(() => publications.Current.Json,
-            Path.Combine(dataDirectory, "map-catalog.json"), Path.Combine(dataDirectory, "chat-craft-commands.json"));
+            Path.Combine(dataDirectory, "map-catalog.json"), Path.Combine(dataDirectory, "chat-craft-commands.json"),
+            waitForSnapshot: publications.WaitForNewerAsync,
+            craftActivityChanged: active => Volatile.Write(ref activeCraft, active ? 1 : 0));
         crafting.Map(app);
         app.MapGet("/events", async (HttpContext context) =>
         {
@@ -155,19 +164,24 @@ static class LiveCounterServer
 
         var producer = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(intervalMs));
+            var cadence = new CraftCaptureCadence(intervalMs);
+            var captureClock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                do
+                while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
                 {
-                    var timerWatch = Stopwatch.StartNew();
-                    var payload = JsonSerializer.SerializeToNode(capture(), compact)!.AsObject();
-                    timerWatch.Stop();
-                    payload["sampleDurationMs"] = Math.Round(timerWatch.Elapsed.TotalMilliseconds, 2);
-                    payload["sequence"] = ++sequence;
-                    var json = payload.ToJsonString(compact);
-                    await publications.PublishAsync(new Publication(sequence, json), payload, app.Lifetime.ApplicationStopping);
-                } while (await timer.WaitForNextTickAsync(app.Lifetime.ApplicationStopping));
+                    if (cadence.TryBegin(captureClock.Elapsed, Volatile.Read(ref activeCraft) != 0))
+                    {
+                        var timerWatch = Stopwatch.StartNew();
+                        var payload = JsonSerializer.SerializeToNode(capture(), compact)!.AsObject();
+                        timerWatch.Stop();
+                        payload["sampleDurationMs"] = Math.Round(timerWatch.Elapsed.TotalMilliseconds, 2);
+                        payload["sequence"] = ++sequence;
+                        var json = payload.ToJsonString(compact);
+                        await publications.PublishAsync(new Publication(sequence, json), payload, app.Lifetime.ApplicationStopping);
+                    }
+                    await Task.Delay(cadence.DelayMs(captureClock.Elapsed, Volatile.Read(ref activeCraft) != 0), app.Lifetime.ApplicationStopping);
+                }
             }
             catch (OperationCanceledException) when (app.Lifetime.ApplicationStopping.IsCancellationRequested) { }
             catch (Exception error)

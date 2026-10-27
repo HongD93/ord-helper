@@ -16,7 +16,7 @@ dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;bo
 <details class="filters"><summary>유닛 필터</summary><div class="filter-content"><div class="filter-main"><label><input id="owned-only" type="checkbox">보유 유닛만</label><label><input id="materials-only" type="checkbox">유닛 재료 충족</label><span id="last-updated"></span><span id="craft-availability">게임 조합 준비 중</span><button id="filter-clear" type="button">필터 초기화</button></div><div class="tier-filters" id="tier-filters"></div></div></details>
 <div class="state-banner" id="state-banner" data-tone="waiting">게임에 연결 중</div><div class="craft-feedback" id="craft-feedback" role="status" hidden></div><main class="board-scroll"><div class="board" id="board"></div><div id="catalog-state" class="empty-board">유닛 정보를 불러오는 중</div></main>
 <dialog id="unit-detail" aria-labelledby="detail-name"><div class="detail-topbar"><button id="detail-back" class="detail-nav" type="button" aria-label="이전 유닛">←</button><button class="close-detail" id="close-detail" type="button" aria-label="닫기">×</button></div><div class="detail-header"><div id="detail-icon"></div><div class="detail-title"><h2 id="detail-name"></h2><div id="detail-tier"></div></div><div class="detail-summary"><span id="detail-story" class="detail-story" hidden><span id="detail-story-rank" class="story-rank"></span></span><div class="detail-abilities" id="detail-abilities" hidden></div></div></div><div class="detail-content"><div class="detail-top"><span id="detail-mode"></span><span id="detail-quantity"></span></div><div id="detail-choice" class="detail-choice" hidden></div><select id="recipe-options" aria-label="조합법" hidden></select><div id="recipe-detail"></div></div></dialog><div id="toast" role="status" hidden></div>
-<script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
+<script src="/unit-resource-skills.js"></script><script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
 "use strict";
 const byId=id=>document.getElementById(id);
 const numberFormat=new Intl.NumberFormat("ko-KR");
@@ -55,6 +55,7 @@ let craftCapabilityRevision=0,executionPlanCache=new Map();
 let detailStack=[],boardGroups=[],analysisSignature="",analysisCache=new Map(),lastDetailKey="";
 const nightmareIntegration=(()=>{try{return window.OrdNightmareIntegration?.create({
   host:byId("nightmare-advisor-host"),onOpenUnit:code=>openDetail(code),onCraftTarget:requestRecommendedCraft,onStopCraft:requestCraftStop,
+  formatUnitName:unit=>{const name=cleanName(unit.displayName||unit.name||unitByCode.get(unit.rawcode)?.displayName);return window.OrdUnitResourceSkills?.decorate?window.OrdUnitResourceSkills.decorate(name,unit.rawcode,nativeUnitDescriptions,catalog?.map?.sha256):name;},
   onCraftContextChange:()=>{if(detailUnit){lastDetailKey="";renderDetail();}},
   onShowRecipe:(code,recipeId)=>{
     if(!unitByCode.has(code))return;
@@ -216,10 +217,13 @@ function recipeConditionReason(requirements){
 }
 function compactName(unit){
   if(!unit)return "이름 없는 유닛";
-  if(unit.rawcode==="H0BK")return unit.routeMaterialRawcode==="H099"?"니카 (루피 초월)":unit.routeMaterialRawcode==="H0B2"?"니카 (스네이크맨 초월)":"니카";
-  if(unit.rawcode==="e018")return "선택 위습";
-  if(unit.rawcode==="e0IX")return "랜덤 위습";
-  return cleanName(unit.meta?.displayName||unit.displayName).replace(/뱀초/g,"스네이크맨").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"");
+  let name;
+  if(unit.rawcode==="H0BK")name=unit.routeMaterialRawcode==="H099"?"니카 (루피 초월)":unit.routeMaterialRawcode==="H0B2"?"니카 (스네이크맨 초월)":"니카";
+  else if(unit.rawcode==="e018")name="선택 위습";
+  else if(unit.rawcode==="e0IX")name="랜덤 위습";
+  else name=cleanName(unit.meta?.displayName||unit.displayName).replace(/뱀초/g,"스네이크맨").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"");
+  const markers=typeof window!=="undefined"?window.OrdUnitResourceSkills:null;
+  return markers?.decorate?markers.decorate(name,unit.rawcode,typeof nativeUnitDescriptions!=="undefined"?nativeUnitDescriptions:null,typeof catalog!=="undefined"?catalog?.map?.sha256:null):name;
 }
 function groupLabel(unit){return unit?.meta?.groupName||tierSettings.get(unit?.tier)?.label||"기타";}
 function updateAnalysisCache(){
