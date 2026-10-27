@@ -529,7 +529,7 @@
       return {lowerBounds,searchLimited:nodes>2000};
     }
     function unavoidableSharedChoiceDeficit(roster,inventory,template,settings){
-      const nonExclusive=new Set(["h060","h05Y",...(combat.acquisitionModel?.independentlyAcquirableRequirementRawcodes||[])]);
+      const nonExclusive=new Set(["h060","h05Y",...(combat.acquisitionModel?.independentlyAcquirableRequirementRawcodes||[]),...(combat.acquisitionModel?.sharedChoiceResources||[]).flatMap(source=>source.nonExclusiveOutputRawcodes||[])]);
       const materials=unique((combat.acquisitionModel?.sharedChoiceResources||[]).flatMap(source=>(source.options||[]).flatMap(option=>(option.outputs||[]).map(item=>item.rawcode))).filter(code=>!nonExclusive.has(code)));
       const minimum=minimumNecessaryMaterials(roster,inventory,materials,settings),lowerBounds=minimum.lowerBounds;
       const acquisition=acquisitionPlan(lowerBounds,inventory,template);
@@ -558,7 +558,11 @@
       if(!limited&&!necessary.searchLimited&&proof.reason==="missing_material"&&missingBlocked.some(item=>mandatory.some(required=>required.rawcode===item.rawcode)))hard.push("confirmed_recipe_condition_blocked");
       if(!limited&&!necessary.searchLimited&&proof.reason==="missing_material"&&missingNonForecastable.some(item=>mandatory.some(required=>required.rawcode===item.rawcode)))hard.push("unowned_random_only_material");
       let sharedChoiceProof=null;
-      if(proof.executable&&!proofAcquisition.sharedChoiceFeasible){sharedChoiceProof=unavoidableSharedChoiceDeficit(roster,inventory,template,settings);if(sharedChoiceProof.proven)hard.push("shared_choice_budget_exhausted");else conditional.push("shared_choice_path_unresolved");}
+      if(proof.executable&&!proofAcquisition.sharedChoiceFeasible){
+        sharedChoiceProof=unavoidableSharedChoiceDeficit(roster,inventory,template,settings);
+        const unknownReward=proofAcquisition.sources.some(source=>source.unknownRewardEventId&&(combat.acquisitionModel?.sharedChoiceResources||[]).some(resource=>resource.sourceRawcode===source.rawcode&&sharedChoiceProof.lowerBounds.some(item=>(resource.options||[]).some(option=>(option.outputs||[]).some(output=>output.rawcode===item.rawcode)))));
+        if(sharedChoiceProof.proven&&!unknownReward)hard.push("shared_choice_budget_exhausted");else conditional.push(unknownReward?"shared_choice_reward_unknown":"shared_choice_path_unresolved");
+      }
       if(hard.length)return remember({status:"blocked",grade:"C",reasons:hard,diagnosed,missingNonForecastableMaterials:missingNonForecastable,blockedMaterialRawcodes:missingBlocked.map(item=>item.rawcode),sharedChoiceProof});
       const cost=proof.executable?totals(proof.steps,settings):null,conditions=conditionalCosts(cost,settings);
       if(conditions.missingItems.some(item=>item.known&&item.missing>0))conditional.push("random_item_missing");
@@ -730,7 +734,7 @@
       const needs=new Map((materials||[]).map(x=>[x.rawcode,x.count])),allocations=[],sources=[],warnings=[];
       const shared=(combat.acquisitionModel?.sharedChoiceResources||[]).slice(0,4);
       // 선택 외 도박 경로가 있다는 이유로 희귀 선택 결과를 무제한 확보 가능하다고 보지 않는다.
-      const nonExclusive=new Set(["h060","h05Y",...(combat.acquisitionModel?.independentlyAcquirableRequirementRawcodes||[])]);
+      const nonExclusive=new Set(["h060","h05Y",...(combat.acquisitionModel?.independentlyAcquirableRequirementRawcodes||[]),...(combat.acquisitionModel?.sharedChoiceResources||[]).flatMap(source=>source.nonExclusiveOutputRawcodes||[])]);
       const exclusive=new Set(shared.flatMap(s=>(s.options||[]).flatMap(o=>(o.outputs||[]).map(x=>x.rawcode))).filter(c=>!nonExclusive.has(c)));
       const score=(stock,used,preferred)=>[Array.from(stock).filter(([c])=>exclusive.has(c)).reduce((n,[,v])=>n+v,0),Array.from(stock.values()).reduce((a,b)=>a+b,0),Array.from(stock.values()).filter(v=>v>0).length,used,-preferred];
       const better=(a,b)=>{for(let i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]<b[i];}return false;};
@@ -742,8 +746,10 @@
         const spent=Array.from(inventory).filter(([code,count])=>count>0&&localExclusive.some(material=>certainlyUses(code,material))).map(([code])=>code);
         const proposed=Number.isSafeInteger(resource.futureRewardBudget)?Math.max(0,resource.futureRewardBudget):0;
         // 단발 보상을 현재 위습이나 이미 소비된 상위 유닛과 다시 합산하지 않는다.
-        const remainingRewardKnown=["confirmed","partial"].includes(activeRewardBudget?.status);
-        const future=remainingRewardKnown?Math.floor(((activeRewardBudget.guaranteed.units?.[resource.sourceRawcode]||0)+(activeRewardBudget.conditional.units?.[resource.sourceRawcode]||0))/consumed):owned>0||spent.length?0:Math.min(1,proposed),budget=Math.min(16,owned+future),preferred=template.transcendencePlan?.preferredOptionId;
+        const rewardEventId=Number.isInteger(resource.reward?.storyOrder)?"story-clear-"+String(resource.reward.storyOrder).padStart(2,"0"):null;
+        const unknownRewardEventId=activeRewardBudget?.status==="partial"&&rewardEventId&&(activeRewardBudget.unknownEvents||[]).includes(rewardEventId)?rewardEventId:null;
+        const remainingRewardKnown=["confirmed","partial"].includes(activeRewardBudget?.status)&&!unknownRewardEventId;
+        const future=remainingRewardKnown||unknownRewardEventId?Math.floor(((activeRewardBudget.guaranteed.units?.[resource.sourceRawcode]||0)+(activeRewardBudget.conditional.units?.[resource.sourceRawcode]||0))/consumed):owned>0||spent.length?0:Math.min(1,proposed),budget=Math.min(16,owned+future),preferred=template.transcendencePlan?.preferredOptionId;
         let best={remaining:new Map(needs),counts:[],used:0,score:score(needs,0,0)};
         function visit(index,left,remaining,counts,used,preferredCount){
           if(index===choices.length){const currentScore=score(remaining,used,preferredCount);if(better(currentScore,best.score))best={remaining,counts:counts.slice(),used,score:currentScore};return;}
@@ -760,7 +766,7 @@
           allocations.push({sourceRawcode:resource.sourceRawcode,sourceName:info(resource.sourceRawcode).name,optionId:option.id,label:({kuma:"쿠마","rayleigh-ship":"레일리·해적선",contract:"계약"})[option.id]||option.outputs.map(x=>info(x.rawcode).name).join("·"),count,fromInventory,fromFuture:count-fromInventory,
             outputs:option.outputs.map(x=>({...info(x.rawcode),count:x.count*count})),evidence:option.evidence});
         }
-        sources.push({rawcode:resource.sourceRawcode,name:info(resource.sourceRawcode).name,inventoryCount:owned,futureBudget:future,configuredFutureBudget:proposed,used:best.used,fromFuture:Math.max(0,best.used-owned),spentEvidence:spent,spentEvidenceIsConservative:true,remainingRewardKnown});
+        sources.push({rawcode:resource.sourceRawcode,name:info(resource.sourceRawcode).name,inventoryCount:owned,futureBudget:future,configuredFutureBudget:proposed,used:best.used,fromFuture:Math.max(0,best.used-owned),spentEvidence:spent,spentEvidenceIsConservative:true,remainingRewardKnown,unknownRewardEventId});
         if(spent.length&&proposed)warnings.push("이미 보유한 선택 결과나 상위 유닛과 단발 스토리 보상을 중복 계산하지 않았습니다.");
       }
       const remainingMaterials=Array.from(needs,([rawcode,count])=>({...info(rawcode),count})),remainingExclusive=remainingMaterials.filter(x=>exclusive.has(x.rawcode));

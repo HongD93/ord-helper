@@ -29,14 +29,19 @@ sealed class GameCraftService
     private readonly string? initializationError;
     private readonly Func<PlannedCraftStep, JsonElement, CancellationToken, Task<string?>>? stepExecutor;
     private readonly Func<PlannedCraftStep, JsonElement, bool>? choiceConsumptionProof;
+    private readonly Func<long, CancellationToken, Task>? waitForSnapshot;
+    private readonly Action<bool>? craftActivityChanged;
 
     public GameCraftService(Func<string> latestSnapshotJson, string catalogPath, string commandsPath,
         Func<PlannedCraftStep, JsonElement, CancellationToken, Task<string?>>? stepExecutor = null,
-        Func<PlannedCraftStep, JsonElement, bool>? choiceConsumptionProof = null)
+        Func<PlannedCraftStep, JsonElement, bool>? choiceConsumptionProof = null,
+        Func<long, CancellationToken, Task>? waitForSnapshot = null, Action<bool>? craftActivityChanged = null)
     {
         this.latestSnapshotJson = latestSnapshotJson;
         this.stepExecutor = stepExecutor;
         this.choiceConsumptionProof = choiceConsumptionProof;
+        this.waitForSnapshot = waitForSnapshot;
+        this.craftActivityChanged = craftActivityChanged;
         try
         {
             using var catalog = JsonDocument.Parse(File.ReadAllText(catalogPath));
@@ -131,6 +136,7 @@ sealed class GameCraftService
             enabled = initializationError is null,
             continuousCraftSupported = true,
             choiceWispSupported = GameChoiceInput.Supported,
+            partialChoiceRecoverySupported = true,
             protectedCountsSupported = true,
             exactPlanSupported = true,
             adaptiveCraftSupported = true,
@@ -226,10 +232,13 @@ sealed class GameCraftService
     {
         var acquired = false;
         var inputAttempted = false;
+        ChoiceWispCameraSession? cameraSession = null;
         try
         {
             await inputGate.WaitAsync(stopping);
             acquired = true;
+            craftActivityChanged?.Invoke(true);
+            cameraSession = GameChoiceInput.CreateCameraSession();
             stopping.ThrowIfCancellationRequested();
             if (operation.StopRequested) { operation.CompleteStopped(); return; }
             if (!TryReadSnapshot(out var baseline, out var reason))
@@ -350,6 +359,8 @@ sealed class GameCraftService
                 var expected = new Dictionary<string, int>(StringComparer.Ordinal) { [step.ResultRawcode] = step.ResultCount };
                 foreach (var ingredient in step.Ingredients)
                     expected[ingredient.Rawcode] = checked(expected.GetValueOrDefault(ingredient.Rawcode) - ingredient.Count);
+                if (step.Type != "choice") await GameChoiceInput.RestoreCameraAsync(cameraSession!, CancellationToken.None);
+                stopping.ThrowIfCancellationRequested();
                 // 각 단계의 정상 입력은 정확히 한 번이다. 실패·시간 초과 뒤에는 재전송하지 않는다.
                 if (!operation.TryBeginStep()) { operation.CompleteStopped(); return; }
                 inputAttempted = true;
@@ -362,7 +373,7 @@ sealed class GameCraftService
                 }
                 else if (step.Type == "choice")
                 {
-                    var execution = await GameChoiceInput.ExecuteWithProofAsync(step.ResultRawcode, baseline.Json, stopping, step.ResultCount);
+                    var execution = await GameChoiceInput.ExecuteWithProofAsync(step.ResultRawcode, baseline.Json, stopping, step.ResultCount, cameraSession);
                     inputError = execution.Error;
                     consumedWispVerified = execution.ConsumedWispVerified;
                 }
@@ -388,10 +399,22 @@ sealed class GameCraftService
                     (step.Conditions ?? []).Any(condition => condition.Type is "IFCT" or "CHCT" or "SKPT" or "NIKA") ? new ChoiceWispResultStability() : null;
                 // 스토리 보상과 선택 위습 소모가 겹쳐도, 정확히 선택한 객체의 소모 증거가 있을 때만 순증을 허용한다.
                 var allowChoiceWispReward = operation.Adaptive && ProofBackedChoice(step, consumedWispVerified);
-                while (watch.Elapsed < (step.Type == "choice" ? ChoiceWispWaitPolicy.ResultTimeout : TimeSpan.FromSeconds(5)))
+                var seenSequence = baseline.Sequence;
+                var firstResultFrame = true;
+                var resultTimeout = step.Type == "choice" ? ChoiceWispWaitPolicy.ResultTimeout : TimeSpan.FromSeconds(5);
+                while (watch.Elapsed < resultTimeout)
                 {
-                    await Task.Delay(step.Type == "choice" ? ChoiceWispWaitPolicy.ResultPollInterval : TimeSpan.FromMilliseconds(100), stopping);
+                    if (!firstResultFrame)
+                    {
+                        if (waitForSnapshot is not null) await waitForSnapshot(seenSequence, stopping);
+                        else await Task.Delay(20, stopping);
+                    }
+                    firstResultFrame = false;
+                    stopping.ThrowIfCancellationRequested();
+                    if (watch.Elapsed >= resultTimeout) break;
                     var frame = ReadFrame();
+                    if (frame.TryGetProperty("sequence", out var observedSequenceValue) && observedSequenceValue.TryGetInt64(out var observedSequence))
+                        seenSequence = Math.Max(seenSequence, observedSequence);
                     if (TrySession(frame, out var observedSession) && !origin.Session.Matches(observedSession))
                     {
                         operation.Complete("failed", Stopped(index, "게임이나 플레이어가 바뀌어 조합을 중단했습니다."));
@@ -469,7 +492,21 @@ sealed class GameCraftService
                 ? "조합 결과 확인 중 문제가 발생했습니다. 결과를 확인하기 전 같은 조합을 다시 누르지 마세요. 자동으로 다시 실행하지 않습니다."
                 : "조합 요청을 확인하지 못해 실행하지 않았습니다.");
         }
-        finally { if (acquired) inputGate.Release(); }
+        finally
+        {
+            try
+            {
+                if (cameraSession is not null) await GameChoiceInput.RestoreCameraAsync(cameraSession, CancellationToken.None);
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    try { craftActivityChanged?.Invoke(false); }
+                    finally { inputGate.Release(); }
+                }
+            }
+        }
     }
 
     // 자체 검사에서는 주입한 실행기만 허용하며 Windows 입력 경로에 도달하지 않는다.
