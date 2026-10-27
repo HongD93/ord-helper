@@ -24,10 +24,12 @@ static class GameCraftSequenceTests
         {
             WriteCatalog(catalog, aliases);
             async Task<JsonElement> Execute(Fixture fixture, string recipe, CancellationToken token = default, IReadOnlyDictionary<string, int>? protectedCounts = null,
-                bool adaptive = false, RequestedCraftStep[]? expectedSteps = null, Action<Action>? registerStop = null, bool provideChoiceProof = false)
+                bool adaptive = false, RequestedCraftStep[]? expectedSteps = null, Action<Action>? registerStop = null, bool provideChoiceProof = false,
+                Func<long, CancellationToken, Task>? waitForSnapshot = null, Action<bool>? craftActivityChanged = null)
             {
                 var service = new GameCraftService(fixture.Snapshot, catalog, aliases, fixture.Execute,
-                    provideChoiceProof ? (_, _) => fixture.LastChoiceConsumed : null);
+                    provideChoiceProof ? (_, _) => fixture.LastChoiceConsumed : null,
+                    waitForSnapshot: waitForSnapshot, craftActivityChanged: craftActivityChanged);
                 return await service.RunFixtureAsync(recipe, 1, token, app, protectedCounts, adaptive, expectedSteps, registerStop);
             }
             var bottom = new Fixture(new() { ["b001"] = 4 });
@@ -88,6 +90,101 @@ static class GameCraftSequenceTests
             result = await Execute(delayed, "r003");
             Check(Status(result) == "succeeded" && delayed.Calls.Count == 1 && delayed.Count("g001") == 1,
                 "ingredient and output frames may arrive separately without duplicate input");
+            passed++;
+
+            var immediateOutput = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 });
+            var immediateActivity = new List<bool>(); var immediateWaits = 0;
+            result = await Execute(immediateOutput, "r003", waitForSnapshot: (_, _) =>
+            {
+                immediateWaits++;
+                throw new Exception("An already visible result must not wait for another snapshot.");
+            }, craftActivityChanged: immediateActivity.Add);
+            Check(Status(result) == "succeeded" && immediateWaits == 0 && immediateOutput.Calls.SequenceEqual(["r003"]) &&
+                immediateActivity.SequenceEqual([true, false]), "an immediate result skips the frame wait and releases fast capture after success");
+            passed++;
+
+            var signaledOutput = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 }) { DelayResult = true };
+            var signaledActivity = new List<bool>(); var signalWaits = new List<long>();
+            result = await Execute(signaledOutput, "r003", waitForSnapshot: (sequence, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                Check(sequence == signaledOutput.LastSequence && sequence > 1, "the frame wait starts after the latest observed incomplete result");
+                signalWaits.Add(sequence);
+                return Task.CompletedTask;
+            }, craftActivityChanged: signaledActivity.Add);
+            Check(Status(result) == "succeeded" && signalWaits.Count == 1 && signaledOutput.Calls.SequenceEqual(["r003"]) &&
+                signaledOutput.Count("g001") == 1 && signaledActivity.SequenceEqual([true, false]),
+                "a signaled split result resumes verification without sending another craft input");
+            passed++;
+
+            var transientFrame = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 });
+            transientFrame.AfterExecute = (fixture, _, _) => fixture.SnapshotStatus = "units_changed";
+            var transientWaits = 0;
+            result = await Execute(transientFrame, "r003", waitForSnapshot: (sequence, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                Check(sequence == transientFrame.LastSequence, "an unstable published frame still advances the wait sequence");
+                transientWaits++; transientFrame.SnapshotStatus = "snapshot_read";
+                return Task.CompletedTask;
+            });
+            Check(Status(result) == "succeeded" && transientWaits == 1 && transientFrame.Calls.SequenceEqual(["r003"]),
+                "a transient invalid frame waits for a fresh publication without resending input");
+            passed++;
+
+            using (var canceledWait = new CancellationTokenSource())
+            {
+                var canceledOutput = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 }) { DelayResult = true };
+                var canceledActivity = new List<bool>(); var canceledWaits = 0;
+                result = await Execute(canceledOutput, "r003", canceledWait.Token, waitForSnapshot: (_, token) =>
+                {
+                    canceledWaits++; canceledWait.Cancel();
+                    return Task.FromCanceled(token);
+                }, craftActivityChanged: canceledActivity.Add);
+                Check(Status(result) == "failed" && Completed(result) == 0 && canceledWaits == 1 && canceledOutput.Calls.SequenceEqual(["r003"]) &&
+                    canceledActivity.SequenceEqual([true, false]), "cancellation inside the frame wait releases fast capture and never repeats input");
+                passed++;
+            }
+
+            var failedWait = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 }) { DelayResult = true };
+            var failedWaitActivity = new List<bool>(); var failedWaitCalls = 0;
+            result = await Execute(failedWait, "r003", waitForSnapshot: (_, _) =>
+            {
+                failedWaitCalls++;
+                return Task.FromException(new IOException("fixture frame notification failure"));
+            }, craftActivityChanged: failedWaitActivity.Add);
+            Check(Status(result) == "failed" && Completed(result) == 0 && failedWaitCalls == 1 && failedWait.Calls.SequenceEqual(["r003"]) &&
+                failedWaitActivity.SequenceEqual([true, false]), "a failed frame notification releases fast capture without a replacement input");
+            passed++;
+
+            var unavailable = new Fixture(new()); var unavailableActivity = new List<bool>();
+            result = await Execute(unavailable, "r003", craftActivityChanged: unavailableActivity.Add);
+            Check(Status(result) == "failed" && unavailable.Calls.Count == 0 && unavailableActivity.SequenceEqual([true, false]),
+                "a rejected plan resets fast capture after acquiring the input gate without issuing input");
+            passed++;
+
+            var serialized = new Fixture(new() { ["m001"] = 1, ["m002"] = 1 }) { DelayResult = true };
+            var serializedActivity = new List<bool>();
+            var waitingForFrame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFrame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var serializedService = new GameCraftService(serialized.Snapshot, catalog, aliases, serialized.Execute,
+                waitForSnapshot: async (_, token) => { waitingForFrame.TrySetResult(); await releaseFrame.Task.WaitAsync(token); },
+                craftActivityChanged: serializedActivity.Add);
+            var firstRequest = serializedService.RunFixtureAsync("r003", 1, default, app);
+            try
+            {
+                await waitingForFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                using var queuedCancel = new CancellationTokenSource();
+                var queuedRequest = serializedService.RunFixtureAsync("r003", 1, queuedCancel.Token, app);
+                Check(serializedActivity.SequenceEqual([true]), "a queued request cannot change the active request capture state");
+                queuedCancel.Cancel();
+                var queuedResult = await queuedRequest;
+                Check(Status(queuedResult) == "failed" && serializedActivity.SequenceEqual([true]) && serialized.Calls.SequenceEqual(["r003"]),
+                    "canceling a request waiting for the input gate cannot turn off the executing request fast capture");
+            }
+            finally { releaseFrame.TrySetResult(); await firstRequest; }
+            var serializedResult = await firstRequest;
+            Check(Status(serializedResult) == "succeeded" && serializedActivity.SequenceEqual([true, false]) && serialized.Calls.SequenceEqual(["r003"]),
+                "the gate owner alone releases fast capture after its verified result");
             passed++;
 
             using var canceled = new CancellationTokenSource();
@@ -625,6 +722,8 @@ static class GameCraftSequenceTests
         public string Identity { get; set; } = "00010000:00020000:00000000";
         public int ReadsAfterFirst { get; set; }
         public bool DelayResult { get; init; }
+        public string SnapshotStatus { get; set; } = "snapshot_read";
+        public long LastSequence => sequence;
         public string? ResourcesStatus { get; set; }
         public int? Wood { get; set; }
         public int? Gold { get; set; }
@@ -642,7 +741,7 @@ static class GameCraftSequenceTests
             if (pendingResult is { } pending && ++pendingReads >= 2) { Add(pending.ResultRawcode, pending.ResultCount); pendingResult = null; }
             return JsonSerializer.Serialize(new
             {
-                status = "snapshot_read", timestamp = DateTimeOffset.UtcNow, sequence = ++sequence,
+                status = SnapshotStatus, timestamp = DateTimeOffset.UtcNow, sequence = ++sequence,
                 processId = 123456789, gameVersion = "1.28.5.7680", loadedMap = "fixture-map.w3x", loadedMapHash = Hash,
                 catalogMatchesLoadedArchive = true, localPlayer = 0, readErrors = 0, stableRoots = true, stableUnits = true,
                 sessionIdentity = Identity,

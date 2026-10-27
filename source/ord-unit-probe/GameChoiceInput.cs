@@ -65,7 +65,32 @@ static class GameChoiceInput
     public static async Task<string?> ExecuteAsync(string resultRawcode, JsonElement baseline, CancellationToken cancel)
         => (await ExecuteWithProofAsync(resultRawcode, baseline, cancel)).Error;
 
-    internal static async Task<ExecutionResult> ExecuteWithProofAsync(string resultRawcode, JsonElement baseline, CancellationToken cancel, int count = 1)
+    internal static ChoiceWispCameraSession CreateCameraSession() => new();
+
+    internal static Task<bool> RestoreCameraAsync(ChoiceWispCameraSession session, CancellationToken cancel = default) =>
+        session.RestoreAsync(RestoreCameraCoreAsync, cancel);
+
+    private static async Task<bool> RestoreCameraCoreAsync(ChoiceWispCameraCheckpoint checkpoint, CancellationToken cancel)
+    {
+        cancel.ThrowIfCancellationRequested();
+        var identity = checkpoint.Identity;
+        using var process = Process.GetProcessById(identity.ProcessId);
+        if (process.StartTime.ToUniversalTime().Ticks != identity.ProcessStartedUtcTicks || process.MainWindowHandle != identity.Window) return false;
+        var game = process.Modules.Cast<ProcessModule>().SingleOrDefault(module => module.ModuleName.Equals("Game.dll", StringComparison.OrdinalIgnoreCase));
+        var storm = process.Modules.Cast<ProcessModule>().SingleOrDefault(module => module.ModuleName.Equals("Storm.dll", StringComparison.OrdinalIgnoreCase));
+        if (game?.FileVersionInfo.FileVersion != "1.28.5.7680" || storm is null || checked((uint)game.BaseAddress.ToInt64()) != identity.ModuleBase) return false;
+        using var memory = new MemoryReader(process.Id, 0x0410);
+        var map = LoadedMapReader.Read(memory, checked((uint)storm.BaseAddress.ToInt64()));
+        if (map is null || !string.Equals(map, identity.MapPath, StringComparison.OrdinalIgnoreCase)) return false;
+        using (var file = File.OpenRead(map))
+            if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(file)), identity.MapHash, StringComparison.OrdinalIgnoreCase)) return false;
+        var roots = memory.ReadRoots(identity.ModuleBase + 0xD326F0, identity.ModuleBase + 0xD305E0);
+        if (roots is null || roots.Ui != identity.Ui || roots.Players != identity.Players || roots.Table != identity.Table || roots.LocalPlayer != identity.LocalPlayer) return false;
+        return await GameSelection.RestoreChoiceCameraAsync(memory, identity.ModuleBase, roots, identity.Window, checkpoint, cancel);
+    }
+
+    internal static async Task<ExecutionResult> ExecuteWithProofAsync(string resultRawcode, JsonElement baseline, CancellationToken cancel,
+        int count = 1, ChoiceWispCameraSession? cameraSession = null)
     {
         try
         {
@@ -94,9 +119,11 @@ static class GameChoiceInput
                 return new("유닛 정보가 바뀌어 위습을 사용하지 않았습니다.", false);
             var window = process.MainWindowHandle;
             if (window == IntPtr.Zero) return new("워크래프트 창을 열어 주세요.", false);
+            var cameraIdentity = cameraSession is null ? null : new ChoiceWispCameraIdentity(process.Id, process.StartTime.ToUniversalTime().Ticks,
+                window, moduleBase, roots.Ui, roots.Players, roots.Table, roots.LocalPlayer, map, baseline.GetProperty("loadedMapHash").GetString()!);
             var consumed = false;
             var error = await GameSelection.UseChoiceWispAsync(memory, moduleBase, roots, window, resultRawcode,
-                owned.Units.Where(UnitRules.IsActive).ToArray(), cancel, () => consumed = true, count);
+                owned.Units.Where(UnitRules.IsActive).ToArray(), cancel, () => consumed = true, count, cameraSession, cameraIdentity);
             return new(error, consumed);
         }
         catch (Exception error) when (error is Win32Exception or IOException or InvalidOperationException or ArgumentException or OverflowException)

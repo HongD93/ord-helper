@@ -39,6 +39,17 @@ sealed class ChoiceWispWaitPolicy
         ResetMode(); ResetInactive();
     }
 
+    internal bool ResumeAfterRecovery(TimeSpan elapsed)
+    {
+        if (Stage is not (ChoiceWispWaitStage.Travelling or ChoiceWispWaitStage.AwaitConsumption) ||
+            elapsed < lastObserved || elapsed - started >= MaximumWait) return false;
+        lastObserved = lastProgress = elapsed;
+        arrivedAt = invalidIdentitySince = null;
+        ResetMode(); ResetInactive();
+        Stage = ChoiceWispWaitStage.Travelling;
+        return true;
+    }
+
     internal ChoiceWispWaitDecision Observe(TimeSpan elapsed, ChoiceWispWaitObservation sample)
     {
         if (Stage == ChoiceWispWaitStage.Stopped) return Decision(ChoiceWispWaitAction.Stop, stoppedReason);

@@ -75,6 +75,30 @@ if (args.Contains("--self-test-special-conditions"))
     await NikaMaterialChoiceTests.RunAsync();
     return;
 }
+if (args.Contains("--self-test-craft-speed"))
+{
+    ChoiceWispWaitPolicyTests.Run();
+    ChoiceWispBatchPlanTests.Run();
+    ChoiceWispBatchSelectionTests.Run();
+    ChoiceWispBatchRecoveryTests.Run();
+    ChoiceWispRecoveryCleanupTests.Run();
+    ChoiceWispPortraitTimingTests.Run();
+    await CraftSnapshotTimingTests.RunAsync();
+    ChoiceWispCameraSessionTests.Run();
+    GameSelectionGeometryTests.Run();
+    GameMinimapProjectionTests.Run();
+    SelectionAreaPlanTests.Run();
+    GameInputTests.Run();
+    KoreanKeyboardPlanTests.Run();
+    await GameChatSubmissionTests.RunAsync();
+    CraftPlannerTests.Run();
+    await GameCraftSequenceTests.RunAsync();
+    await GameCraftItemSequenceTests.RunAsync();
+    await GameCraftConditionSequenceTests.RunAsync();
+    await GameSpecialRecipeConditionsTests.RunAsync();
+    await NikaMaterialChoiceTests.RunAsync();
+    return;
+}
 if (args.Contains("--self-test-run-recording"))
 {
     GameProgressionTests.Run();
@@ -97,6 +121,11 @@ if (args.Contains("--self-test"))
     ChoiceWispWaitPolicyTests.Run();
     ChoiceWispBatchPlanTests.Run();
     ChoiceWispBatchSelectionTests.Run();
+    ChoiceWispBatchRecoveryTests.Run();
+    ChoiceWispRecoveryCleanupTests.Run();
+    ChoiceWispPortraitTimingTests.Run();
+    await CraftSnapshotTimingTests.RunAsync();
+    ChoiceWispCameraSessionTests.Run();
     ElderDetector.RunSelfTests();
     GameSelectionGeometryTests.Run();
     GameMinimapProjectionTests.Run();

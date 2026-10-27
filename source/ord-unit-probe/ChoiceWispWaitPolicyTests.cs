@@ -96,6 +96,19 @@ static class ChoiceWispWaitPolicyTests
             Check(Moving().Observe(T(.1), Frame()).Reason == "clock_regressed");
         });
         Test("source becoming inactive before the destination was sent cannot count as our use", () => Check(new ChoiceWispWaitPolicy().Observe(T(0), Frame(active: false)).Reason == "source_inactive_before_destination"));
+        Test("recovery resets progress without extending the original absolute deadline", () =>
+        {
+            var p = Moving(); Check(p.ResumeAfterRecovery(T(44)));
+            Check(p.Observe(T(44.9), Frame()).Action == ChoiceWispWaitAction.Wait);
+            Check(p.Observe(T(45), Frame()).Reason == "absolute_wait_timeout");
+        });
+        Test("recovery cannot reopen an unaccepted or stopped move or regress its clock", () =>
+        {
+            Check(!Ready().ResumeAfterRecovery(T(1)));
+            var p = Moving(); Check(!p.ResumeAfterRecovery(T(.1))); Check(p.ResumeAfterRecovery(T(.3)));
+            Check(p.Observe(T(.4), Frame() with { Cancelled = true }).Action == ChoiceWispWaitAction.Stop);
+            Check(!p.ResumeAfterRecovery(T(.5)));
+        });
         Test("result stability requires distinct fresh collection sequences", () =>
         {
             var p = new ChoiceWispResultStability(); Check(!p.Observe(10, true)); Check(!p.Observe(10, true)); Check(p.Observe(11, true));
