@@ -42,6 +42,7 @@ var mapHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 var inventoryIds = new HashSet<string>(characterIds, StringComparer.Ordinal) { "e018", "e0IX", "e01A", "e017", "e016", "e019", "e015" };
 var playableCatalogPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "map-catalog.json");
 var playableCatalogMatches = false;
+LiveInventoryIdentity? liveInventoryIdentity = null;
 if (catalogHash == GameProgression.SupportedMapHash && File.Exists(playableCatalogPath))
 {
     using var playableCatalog = JsonDocument.Parse(File.ReadAllText(playableCatalogPath));
@@ -61,6 +62,9 @@ if (catalogHash == GameProgression.SupportedMapHash && File.Exists(playableCatal
                 inventoryIds.Add(rawcode);
             if (UnitRules.IsCharacterCatalogUnit(unit)) characterIds.Add(rawcode);
         }
+        liveInventoryIdentity = LiveInventoryIdentity.Load(
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "combat-inventory-identities.json"),
+            playableCatalog.RootElement, GameProgression.SupportedMapHash, inventoryIds);
     }
 }
 if (args.Contains("--fixture"))
@@ -240,7 +244,8 @@ object Capture()
         var stable = SnapshotStability.SameSession(middle, roots) && SnapshotStability.SameSession(after, roots);
         var catalogMatchesLoadedArchive = catalogHash == GameProgression.SupportedMapHash && loadedMapHash == catalogHash &&
             (!serving || playableCatalogMatches);
-        var stableUnits = SnapshotStability.SameInventory(data, second, inventoryIds);
+        var stableUnits = SnapshotStability.SameLiveInventory(data, second, inventoryIds,
+            catalogMatchesLoadedArchive ? liveInventoryIdentity : null);
         var readErrors = data.ReadErrors + (second?.ReadErrors ?? 0);
         var elder = stable ? ElderDetector.Capture(memory, roots, moduleBase, loadedMapHash)
                            : ElderDetector.Unknown("session_changed");

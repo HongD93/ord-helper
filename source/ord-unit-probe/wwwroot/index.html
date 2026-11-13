@@ -468,15 +468,18 @@ function applySnapshot(payload) {
     if (typeof unit.rawcode !== "string" || !Number.isSafeInteger(count) || count < 0 || counts.has(unit.rawcode)) return setLiveState("수량을 불러오지 못했어요","error",false,true);
     counts.set(unit.rawcode,count);
   }
+  const identity=globalThis.OrdNightmareIntegration?.combatInventory?.(catalog);
+  const stableCounts=identity?identity.normalize(counts):counts;
+  if(!stableCounts)return setLiveState("수량을 불러오지 못했어요","error",false,true);
   const before = liveCounts;
-  liveCounts = counts;
+  liveCounts = stableCounts;
   liveReceivedAt = Date.now();
   liveState = {message:"실시간 연결",tone:"live",checking:false};
   const time = new Date(payload.timestamp);
   byId("last-updated").textContent = Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString("ko-KR",{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"}) + " 갱신";
   renderBoard();
   if (before && mode === "live") {
-    for (const code of new Set([...before.keys(),...counts.keys()])) flash(code,(counts.get(code) || 0) - (before.get(code) || 0));
+    for (const code of new Set([...before.keys(),...stableCounts.keys()])) flash(code,(stableCounts.get(code) || 0) - (before.get(code) || 0));
   }
 }
 
@@ -767,6 +770,8 @@ async function requestGameCraft(recipe,craftOptions={}) {
     craftFeedback("게임 정보를 다시 확인해 주세요.","error");return;
   }
   const plan=craftOptions.plan||executionPlanFor(recipe);
+  const identity=globalThis.OrdNightmareIntegration?.combatInventory?.(catalog);
+  const protectedCounts=identity?identity.nativeProtection(craftOptions.protectedCounts):craftOptions.protectedCounts;
   const stepCount=Number.isSafeInteger(plan?.stepCount)&&plan.stepCount>0?plan.stepCount:1;
   const adaptive=craftCapabilities.adaptiveCraftSupported===true;
   let requestId;
@@ -826,7 +831,7 @@ async function requestGameCraft(recipe,craftOptions={}) {
     const response = await fetch("/api/craft",{
       method:"POST",headers:{"Content-Type":"application/json","X-Craft-Token":craftCapabilities.token},
       body:JSON.stringify({recipeId:String(recipe.id),requestId,snapshotSequence:clicked.sequence,expectedSessionIdentity:clicked.sessionIdentity,adaptive,
-        ...(craftOptions.protectedCounts?{protectedCounts:craftOptions.protectedCounts}:{}),
+        ...(protectedCounts?{protectedCounts}:{}),
         ...(craftOptions.expectedSteps?{expectedSteps:craftOptions.expectedSteps}:{})}),
       signal:AbortSignal.timeout(5000)
     });
@@ -857,15 +862,18 @@ async function fetchNativeUnitDescriptions(){
 }
 async function loadCatalog(){
   try{
-    const [response,metadata,descriptions,displayIdentities]=await Promise.all([
+    const [response,metadata,descriptions,displayIdentities,combatIdentities]=await Promise.all([
       fetch("/data/map-catalog.json",{cache:"no-store"}),
       fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       fetchNativeUnitDescriptions(),
-      fetch("/board-display-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null)
+      fetch("/board-display-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
+      fetch("/data/combat-inventory-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null)
     ]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
     catalog=data;nativeUnitDescriptions=descriptions;
+    const combatInventory=globalThis.OrdNightmareIntegration?.configureCombatInventory?.(data,combatIdentities);
+    const legacyHiddenUnits=new Set(["h076","h04T","h04Y","h05D","h0CA","h06O"]);
     const groupMetadata=metadata?.units&&Array.isArray(metadata.groups)?metadata:null;
     const combatMetadata=groupMetadata&&groupMetadata.mapSha256===data.map?.sha256?groupMetadata:null;
     // 목록 분류는 전투 수치와 별개로 유닛의 이름과 등급을 대조한다.
@@ -884,8 +892,8 @@ async function loadCatalog(){
       const boardDisplay=entry?.sourceVerified===true&&(combatMetadata||matchesDisplay)
         ?{displayName:entry.displayName,groupName:entry.groupName}:null;
       const unit={...source,displayName:cleanName(source.displayName||source.properName||source.name),tier:assigned?.tier||tierIds.get(String(source.tier))||normalizeTier(source.tier),order:assigned?.order??order++,boardDisplay};
-      // 2.323 원문에서 확인된 일시 소환체·분신·스킬 효과는 보유 목록에서 제외한다.
-      unit.visible=(source.playable===true||["e0IX","e018"].includes(source.rawcode))&&!["h076","h04T","h04Y","h05D","h0CA","h06O"].includes(source.rawcode)&&!/소환/.test(source.displayName||source.name||"");unitByCode.set(unit.rawcode,unit);
+      const hidden=combatInventory?combatInventory.hide(source.rawcode):legacyHiddenUnits.has(source.rawcode);
+      unit.visible=(source.playable===true||["e0IX","e018"].includes(source.rawcode))&&!hidden&&!/소환/.test(source.displayName||source.name||"");unitByCode.set(unit.rawcode,unit);
       if(unit.visible){if(!unitsByTier.has(unit.tier))unitsByTier.set(unit.tier,[]);unitsByTier.get(unit.tier).push(unit);}
     }
     for(const recipe of data.recipes){if(!recipesByUnit.has(recipe.resultUnitRawcode))recipesByUnit.set(recipe.resultUnitRawcode,[]);recipesByUnit.get(recipe.resultUnitRawcode).push(recipe);}

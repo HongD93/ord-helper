@@ -20,6 +20,7 @@
 !/analysis/tests/
 /analysis/tests/*
 !/analysis/tests/nightmare-strategy-portable-regression.test.cjs
+!/analysis/tests/map-version-recommendation-regression.test.cjs
 
 # 빌드·복원 산출물과 로컬 편집기 설정
 **/bin/
@@ -31,7 +32,8 @@
 **/node_modules/
 
 # 실행용 데이터·아이콘·추천 snapshot은 서버 전환 전까지 로컬에서 관리한다.
-**/wwwroot/data/
+**/wwwroot/data/*
+!/source/ord-unit-probe/wwwroot/data/combat-inventory-identities.json
 **/wwwroot/assets/
 **/wwwroot/nightmare-records-live-*.json
 **/wwwroot/nightmare-records-live-manifest.json

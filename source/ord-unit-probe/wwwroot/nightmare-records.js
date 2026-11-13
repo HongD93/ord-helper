@@ -15,6 +15,22 @@ const historicalProjection=(data,catalog)=>data?.schemaVersion===1&&data.project
 const verifiedNativeCount=entry=>{const proof=entry?.quantityEvidence;return entry?.countVerified===true&&entry.countMeaning==="verified_native_quantity"&&proof?.kind==="verified_native_last_active_quantity"&&proof.sourceProvider==="local-native"&&proof.sourceCountVerified===true&&nativeRunId(proof.canonicalRunId)&&evidenceHash(proof.automaticRunSha256)&&evidenceHash(proof.finalInventorySha256)&&evidenceHash(proof.catalogMapHash)&&proof.rawcode===entry.rawcode&&proof.count===entry.count&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;};
 const verifiedCount=entry=>verifiedNativeCount(entry)||entry?.countVerified===true&&entry.countMeaning==="verified_api_quantity"&&(entry.quantityEvidence||entry.evidence)?.sourceProvider==="tmo"&&(entry.quantityEvidence||entry.evidence)?.sourceCountVerified===true&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;
 const entryCount=entry=>verifiedCount(entry)?entry.count:1;
+function combatForms(catalog){
+ const identities=catalog?.combatInventory,hash=catalog?.map?.sha256;
+ return identities?.schemaVersion===1&&evidenceHash(hash)&&identities.mapSha256===hash&&identities.canonicalByRawcode||null;
+}
+const canonicalForm=(forms,rawcode)=>forms&&Object.hasOwn(forms,rawcode)?forms[rawcode]:rawcode;
+const combatCanonicalRawcode=(catalog,rawcode)=>canonicalForm(combatForms(catalog),rawcode);
+function workingGoalRows(entries,forms){
+ const rows=entries.map(entry=>({rawcode:canonicalForm(forms,entry.rawcode),entry}));
+ if(!rows.some(row=>row.rawcode!==row.entry.rawcode))return rows;
+ const projected=new Map();
+ for(const row of rows){
+  const prior=projected.get(row.rawcode);
+  if(!prior||entryCount(row.entry)>entryCount(prior.entry))projected.set(row.rawcode,row);
+ }
+ return Array.from(projected.values());
+}
 function verifiedLocalSource(value,mapHash){
  const proof=value?.localNativeProof,roster=list(proof?.roster),ids=value?.recordIds||value?.sourceRecordIds,urls=value?.urls||value?.sourceUrls;
  if(value?.sourceProvider!=="local-native"||value.sourceOutcome!=="local_native_victory_confirmed"||proof?.schemaVersion!==1||proof.kind!=="verified_native_clear"||!nativeRunId(proof.canonicalRunId)||![proof.automaticRunSha256,proof.clearRecordSha256,proof.finalInventorySha256,proof.catalogMapHash].every(evidenceHash)||mapHash!==undefined&&proof.catalogMapHash!==mapHash||proof.nativeVictoryConfirmed!==true||proof.terminalRound!==65||!roster.length||!Array.isArray(ids)||ids.length!==1||ids[0]!=="local-"+proof.canonicalRunId||!Array.isArray(urls)||urls.length||value.sourceUrl!=null)return false;
@@ -56,7 +72,7 @@ function recordVersionFacts(record,settings={}){
 }
 const validRecordIds=value=>list(value).length>0&&value.every(id=>typeof id==="string"&&id.trim().length>0&&id.length<=120);
 const validRecordUrls=value=>list(value).length>0&&value.every(url=>typeof url==="string"&&url.length<=4096&&/^https?:\/\/[^/\s?#]+(?:[/?#][^\s]*)?$/i.test(url));
-function originalClearTemplate(template){
+function originalClearTemplate(template,catalog){
  const evidence=template?.sourceEvidence;
  const provenance=template?.recordPresenceGoals===true&&typeof template.recordId==="string"&&template.id==="record-"+template.recordId&&
   !template.ownedUpgradeId&&evidence?.kind==="clear_record"&&evidence.compositionChanged!==true&&!list(evidence.replacements).length&&
@@ -65,7 +81,8 @@ function originalClearTemplate(template){
  const expected=new Map(),actual=new Map(),add=(map,rawcode,count)=>{if(typeof rawcode!=="string"||!Number.isSafeInteger(count)||count<1)return false;map.set(rawcode,Math.max(map.get(rawcode)||0,count));return true;};
  const projection=finalGoalProjection(evidence.mapping);
  if((projection.excluded.length||evidence.goalProjection!==undefined)&&JSON.stringify(evidence.goalProjection)!==JSON.stringify(projection))return false;
- for(const entry of evidence.mapping){if(typeof entry.rawcode!=="string"||!Number.isSafeInteger(entryCount(entry))||entryCount(entry)<1)return false;if(!isResidualGoalTier(entry)&&!add(expected,entry.rawcode,entryCount(entry)))return false;}
+ const forms=combatForms(catalog);
+ for(const entry of evidence.mapping){if(typeof entry.rawcode!=="string"||!Number.isSafeInteger(entryCount(entry))||entryCount(entry)<1)return false;if(!isResidualGoalTier(entry)&&!add(expected,canonicalForm(forms,entry.rawcode),entryCount(entry)))return false;}
  if(!expected.size)return false;
  const cores=list(template.coreGoals),coreCodes=list(template.coreRawcodes);
  if(cores.length!==coreCodes.length||!cores.every(entry=>coreCodes.includes(entry.rawcode)&&add(actual,entry.rawcode,entry.count)))return false;
@@ -120,6 +137,11 @@ function create(catalog,combat,data,options={}){
  const requestedMinimum=versionKey(options.minRecordVersion),minimumRecordVersion=recordOnly?Math.max(versionKey("2.321"),requestedMinimum||0):requestedMinimum;
  const compatible=Boolean(data&&data.catalogMapHash===catalog.map?.sha256),units=new Map(list(catalog.units).map(u=>[u.rawcode,u])),profiles=combat.units||{},curated=combat.curatedStrategyProfiles?.units||{};
  const historical=historicalProjection(data,catalog);
+ const forms=combatForms(catalog),canonical=rawcode=>canonicalForm(forms,rawcode),goalRowsByRecord=new WeakMap();
+ const goalRows=record=>{
+  if(!goalRowsByRecord.has(record))goalRowsByRecord.set(record,workingGoalRows(list(record.goals),forms));
+  return goalRowsByRecord.get(record);
+ };
  const targetVersion=String(catalog.map?.version||"").match(/^\d+\.\d{3}/)?.[0]||"2.323";
  const forbidden=new Set([...temporaryUnits,...list(combat.acquisitionModel?.nonForecastableRawcodes)]),upgrades=list(combat.curatedStrategyProfiles?.ownedSourceUpgrades);
  const families=new Map(list(data?.nativeFormFamilies).map(f=>[f.id,f]));
@@ -207,23 +229,31 @@ function create(catalog,combat,data,options={}){
   if(kingMode==="off"&&settings.includeMysteriousDecks!==true)groups.add("normal");
   const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)&&
     (r.recommendationGroup==null||groups.has(r.recommendationGroup))),handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
-  const selectable=usesHandFit?matching.filter(record=>{let value=null;try{value=handFitAdvisor.preselectionScore(record,stock,settings);}catch{}if(value===-1)return false;affinities.set(record,typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=1?value:null);return true;}):matching;
+  const selectable=usesHandFit?matching.filter(record=>{
+   let value=null;
+   try{
+    const rows=goalRows(record),projected=rows.some(row=>row.rawcode!==row.entry.rawcode)||rows.length!==list(record.goals).length;
+    const handFitRecord=projected?{...record,goals:rows.map(({rawcode,entry})=>({...entry,rawcode}))}:record;
+    value=handFitAdvisor.preselectionScore(handFitRecord,stock,settings);
+   }catch{}
+   if(value===-1)return false;affinities.set(record,typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=1?value:null);return true;
+  }):matching;
   const legacy=selectable.filter(r=>r.sourceProvider!=="tmo"),live=selectable.filter(r=>r.sourceProvider==="tmo");
   const limit=Number.isSafeInteger(options.liveTemplateLimit)?Math.max(16,Math.min(256,options.liveTemplateLimit)):96;
-  const score=record=>list(record.goals).reduce((sum,entry)=>sum+Math.min(stock.get(entry.rawcode)||0,entryCount(entry))*(new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]).has(units.get(entry.rawcode)?.tier)?100:1),0);
-  const finalGoal=entry=>{const unit=units.get(entry.rawcode);return unit?.playable===true&&unit.isSummon!==true&&!temporaryUnits.has(entry.rawcode)&&!isResidualGoalTier(unit);};
+  const score=record=>goalRows(record).reduce((sum,{rawcode,entry})=>sum+Math.min(stock.get(rawcode)||0,entryCount(entry))*(preservedFinalTiers.has(units.get(rawcode)?.tier)?100:1),0);
+  const finalGoal=rawcode=>{const unit=units.get(rawcode);return unit?.playable===true&&unit.isSummon!==true&&!temporaryUnits.has(rawcode)&&!isResidualGoalTier(unit);};
   const actualUpper=rawcode=>{const unit=units.get(rawcode);return unit?.playable===true&&unit.isSummon!==true&&preservedFinalTiers.has(unit.tier)&&!temporaryUnits.has(rawcode)&&!finalMaterialProxies.has(rawcode);};
-  const overlap=(record,upperOnly)=>list(record.goals).filter(entry=>finalGoal(entry)&&(!upperOnly||actualUpper(entry.rawcode))).reduce((sum,entry)=>sum+Math.min(stock.get(entry.rawcode)||0,entryCount(entry)),0);
+  const overlap=(record,upperOnly)=>goalRows(record).filter(({rawcode})=>finalGoal(rawcode)&&(!upperOnly||actualUpper(rawcode))).reduce((sum,{rawcode,entry})=>sum+Math.min(stock.get(rawcode)||0,entryCount(entry)),0);
   const previousOrder=(a,b)=>b.score-a.score||String(b.record.createdAt||"").localeCompare(String(a.record.createdAt||""))||a.record.id.localeCompare(b.record.id);
   const liveRanked=live.map(record=>({record,score:usesHandFit?overlap(record,false):score(record),upperScore:usesHandFit?overlap(record,true):0,affinity:affinities.get(record)??null})).sort((a,b)=>usesHandFit?b.upperScore-a.upperScore||previousOrder(a,b):previousOrder(a,b));
   if(usesHandFit){
    // 미확인 점수를 0으로 취급하지 않고 기존 자리를 보존한다. 확인된 점수만 같은 최상위 보유 그룹 안에서 비교한다.
    for(let start=0;start<liveRanked.length;){let end=start+1;while(end<liveRanked.length&&liveRanked[end].upperScore===liveRanked[start].upperScore)end++;const known=liveRanked.slice(start,end).filter(item=>item.affinity!==null).sort((a,b)=>b.affinity-a.affinity||previousOrder(a,b));let cursor=0;for(let index=start;index<end;index++)if(liveRanked[index].affinity!==null)liveRanked[index]=known[cursor++];start=end;}
   }
-  const buckets=new Map();for(const item of liveRanked){const roles=list(item.record.goals).map(e=>mainRole(e.rawcode)),mode=roles.includes("hybridDps")||roles.includes("physicalDps")&&roles.includes("magicDps")?"hybrid":roles.includes("physicalDps")?"physical":roles.includes("magicDps")?"magic":"unknown";if(!buckets.has(mode))buckets.set(mode,[]);buckets.get(mode).push(item.record);}
+  const buckets=new Map();for(const item of liveRanked){const roles=goalRows(item.record).map(row=>mainRole(row.rawcode)),mode=roles.includes("hybridDps")||roles.includes("physicalDps")&&roles.includes("magicDps")?"hybrid":roles.includes("physicalDps")?"physical":roles.includes("magicDps")?"magic":"unknown";if(!buckets.has(mode))buckets.set(mode,[]);buckets.get(mode).push(item.record);}
   const selectedLive=[],selectedIds=new Set(),keep=record=>{if(record&&!selectedIds.has(record.id)){selectedIds.add(record.id);selectedLive.push(record);}};
   for(const {record}of liveRanked)if(settings.preferredDeckId==="record-"+record.id||String(settings.preferredDeckId||"").startsWith("record-"+record.id+"--"))keep(record);
-  for(const [rawcode,count]of stock)if(count>0&&(usesHandFit?actualUpper(rawcode):preservedFinalTiers.has(units.get(rawcode)?.tier)))keep(liveRanked.find(item=>list(item.record.goals).some(entry=>entry.rawcode===rawcode))?.record);
+  for(const [rawcode,count]of stock)if(count>0&&(usesHandFit?actualUpper(rawcode):preservedFinalTiers.has(units.get(rawcode)?.tier)))keep(liveRanked.find(item=>goalRows(item.record).some(row=>row.rawcode===rawcode))?.record);
   let cursor=0;while(selectedLive.length<limit&&cursor<liveRanked.length){for(const mode of ["physical","magic","hybrid","unknown"]){if(selectedLive.length>=limit)break;keep(buckets.get(mode)?.[cursor]);}cursor++;}
   const preselection={policy:"owned_upper_overlap_and_direction_balanced_recent_records",eligibleRecords:matching.length,legacyRecordsPreserved:legacy.length,totalTmoRecords:live.length,selectedTmoRecords:selectedLive.length,liveLimit:limit,truncated:selectedLive.length<live.length,remainingEnemyCountUsed:false};
   if(usesHandFit)Object.assign(preselection,{policy:"owned_final_upper_then_material_affinity_and_direction_balanced_records",policyExcludedRecords:matching.length-selectable.length,materialScoredRecords:liveRanked.filter(item=>item.affinity!==null).length,materialUnknownRecords:liveRanked.filter(item=>item.affinity===null).length,unknownMaterialPolicy:"preserve_previous_rank_slots"});
@@ -258,7 +288,9 @@ function create(catalog,combat,data,options={}){
    }
    if(unresolved.length){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:unresolved});continue;}
    const finalEntries=resolved.filter(entry=>!isResidualGoalTier(entry)),goalProjection=finalGoalProjection(resolved);
-   const goalCodes=unique(finalEntries.map(e=>e.rawcode)),goalCounts=new Map(goalCodes.map(code=>[code,Math.max(...finalEntries.filter(entry=>entry.rawcode===code).map(entryCount))])),unknownFormCodes=unique(finalEntries.filter(e=>e.formUnknown).flatMap(e=>[e.rawcode,...list(e.candidateRawcodes)]));
+   const goalCodes=unique(finalEntries.map(e=>canonical(e.rawcode))),goalCounts=new Map();
+   for(const entry of finalEntries){const rawcode=canonical(entry.rawcode);goalCounts.set(rawcode,Math.max(goalCounts.get(rawcode)||0,entryCount(entry)));}
+   const unknownFormCodes=unique(finalEntries.filter(e=>e.formUnknown).flatMap(e=>[e.rawcode,...list(e.candidateRawcodes)]));
    if(recordOnly&&!goalCodes.length){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"no_original_registered_goals"}]});continue;}
    // 등록된 일부 유닛의 클리어 표시는 최상위 없는 전체 덱의 증거가 아니다.
    const completeNativeRoster=localVerified&&record.rosterComplete===true&&record.fullRosterCountsVerified===true;
@@ -314,5 +346,5 @@ function create(catalog,combat,data,options={}){
  }
  return {templates,compatible};
 }
-return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection,verifiedLocalSource,reviewedTraitAnchor,historicalProjection};
+return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection,verifiedLocalSource,reviewedTraitAnchor,historicalProjection,combatCanonicalRawcode};
 });
