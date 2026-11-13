@@ -23,6 +23,8 @@ sealed class GameCraftService
     private readonly HashSet<string> characterRawcodes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CraftOperation> requests = new(StringComparer.Ordinal);
     private readonly object requestsGate = new();
+    private bool shutdownRequested;
+    private bool shutdownWorkerStarted;
     private readonly SemaphoreSlim inputGate = new(1, 1);
     private readonly string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private readonly string catalogHash = "";
@@ -133,6 +135,22 @@ sealed class GameCraftService
 
     public void Map(WebApplication app)
     {
+        app.MapPost("/api/shutdown", (HttpContext context) =>
+        {
+            if (!Authorized(context.Request))
+                return Results.Json(new { status = "failed", message = "이 화면에서 보낸 종료 요청만 처리할 수 있습니다." }, statusCode: 403);
+            var startWorker = false;
+            int pending;
+            lock (requestsGate)
+            {
+                shutdownRequested = true;
+                foreach (var operation in requests.Values) if (operation.IsActive) operation.RequestStop();
+                pending = requests.Values.Count(operation => operation.IsActive);
+                if (!shutdownWorkerStarted) { shutdownWorkerStarted = true; startWorker = true; }
+            }
+            if (startWorker) _ = Task.Run(() => StopWhenIdleAsync(app));
+            return Results.Accepted("/api/health", new { status = "shutting_down", pendingOperations = pending });
+        });
         app.MapGet("/api/craft/capabilities", () => Results.Json(new
         {
             enabled = initializationError is null,
@@ -198,6 +216,8 @@ sealed class GameCraftService
             CraftOperation operation;
             lock (requestsGate)
             {
+                if (shutdownRequested)
+                    return Results.Json(new CraftResult("failed", requestId, "도우미가 종료 중이라 조합을 시작하지 않았습니다."), statusCode: 503);
                 if (requests.TryGetValue(requestId, out var previous))
                 {
                     if (previous.RecipeId != request.RecipeId || !SameProtection(previous.ProtectedCounts, protectedCounts) ||
@@ -227,6 +247,17 @@ sealed class GameCraftService
                 app.Lifetime.ApplicationStopping, app));
             return Results.Json(operation.Result, statusCode: 202);
         });
+    }
+
+    private async Task StopWhenIdleAsync(WebApplication app)
+    {
+        while (true)
+        {
+            lock (requestsGate)
+                if (!requests.Values.Any(operation => operation.IsActive) && inputGate.CurrentCount > 0) break;
+            await Task.Delay(100);
+        }
+        app.Lifetime.StopApplication();
     }
 
     private async Task RunAsync(CraftOperation operation, CraftCommand command, long requestedSequence,
@@ -757,6 +788,7 @@ sealed class GameCraftService
         public bool StopRequested { get { lock (gate) return stopRequested; } }
         public CraftResult Result => Volatile.Read(ref result);
         private bool Terminal => result.Status is "succeeded" or "failed" or "unsupported" or "stopped";
+        public bool IsActive => !Terminal;
         public CraftResult RequestStop()
         {
             lock (gate)

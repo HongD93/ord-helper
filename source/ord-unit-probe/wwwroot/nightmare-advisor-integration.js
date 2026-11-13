@@ -44,6 +44,9 @@
     let baseRecordIds=[],recommendInFlight=null,historicalRecords=null;
     let publicRecordsData=null,publicRecordsRevision=null,localRecordsData=null,localRecordsRevision=null;
     let reinforcementRole="auto";
+    let priorityAction=null,lastOverlayMessage="";
+    const overlayBridge=root.chrome?.webview;
+    let overlayActionSerial=0,overlayActionKey="",overlayAction=null,activeOverlayDispatchId=null;
     function validLiveRecords(data,manifest,requireBase=true){
       const catalog=state?.catalog;
       if(data?.schemaVersion!==1||data.catalogMapHash!==catalog?.map?.sha256||!Array.isArray(data.records)||data.records.length!==manifest.recordCount)return false;
@@ -111,19 +114,22 @@
     const panel = root.OrdNightmarePanel.create({
       host:options.host, onOpenUnit:options.onOpenUnit, onShowRecipe:options.onShowRecipe, formatUnitName:options.formatUnitName,
       onStopCraft:()=>{if(state?.craftRunning&&state?.capabilities?.stopCraftSupported===true)return options.onStopCraft?.();},
-      onCraftTarget:(code,goalRawcode,origin)=>{
+      onCraftTarget:(code,goalRawcode,origin,actionOptions)=>{
         if(!connected()||state?.craftRunning||recordUpdateInFlight||pendingRecordsSnapshot||(busy||pending)&&blockingRecompute||state?.capabilities?.protectedCountsSupported!==true||state?.capabilities?.exactPlanSupported!==true)return;
+        const overlayActionId=actionOptions?.overlayActionId;
+        if(overlayActionId!=null&&overlayActionId!==activeOverlayDispatchId)return;
+        const sourceOptions=overlayActionId?{overlayActionId}:undefined;
         if(goalRawcode&&code!==goalRawcode)return;
         if(origin==="reinforcement"){
           const target=(result?.reinforcements?.craftTargets||[]).find(item=>item.rawcode===code&&item.towardRawcode===goalRawcode);
-          if(validReinforcementTarget(target,code,goalRawcode))return options.onCraftTarget?.(code,target);
+          if(validReinforcementTarget(target,code,goalRawcode))return options.onCraftTarget?.(code,target,sourceOptions);
           return;
         }
         if(origin!=null)return;
         if(result?.phase==="early_story"&&!(result.earlyStory?.candidates||[]).some(candidate=>candidate.rawcode===code))return;
         if(result?.targetDeck?.assessment?.compositionStatus==="incomplete"||result?.targetDeck?.acquisitionPlan?.sharedChoiceFeasible===false)return;
         const target=goalRawcode?(Array.isArray(result?.goalCraftTargets)?result.goalCraftTargets.find(item=>item.towardRawcode===goalRawcode&&item.rawcode===code&&item.isWholeGoal!==false&&item.available===true&&item.resourcesReady!==false):result?.craftTargets?.find(item=>item.rawcode===code&&item.isWholeGoal!==false&&item.resourcesReady!==false)):result?.craftTargets?.find(item=>item.rawcode===code&&item.resourcesReady!==false);
-        if(target&&target.protectedCounts&&target.expectedSteps?.length)return options.onCraftTarget?.(code,target);
+        if(target&&target.protectedCounts&&target.expectedSteps?.length)return options.onCraftTarget?.(code,target,sourceOptions);
       },
       onSettingsChange:() => { const next=panel.getSettings(),role=["stun","physical_shred","magic_shred"].includes(next.reinforcementRole)?next.reinforcementRole:"auto";if(role===reinforcementRole){manualDeckChoice = Boolean(next.preferredDeckId);manualDeckChoiceRevision++;}reinforcementRole=role;schedule(true); }, onRetry:() => {
         failed = false; signature = "";
@@ -178,11 +184,45 @@
       recommendInFlight=null;
       if(recordAckTimeout)clearTimeout(recordAckTimeout);recordAckTimeout=null;recordUpdateInFlight=null;
     }
+    function publishOverlay() {
+      const bridge=overlayBridge;
+      if(!bridge)return;
+      const snapshot=state?.snapshot;
+      const card=!destroyed&&connected()&&(!failed||priorityAction||state.craftRunning)&&snapshot.progression?.gameEnded!==true?panel.overlayRecommendation():null;
+      const semanticKey=card?.action?JSON.stringify([session,snapshot.processId,snapshot.sessionIdentity,revision,activeRecordsRevision,card.action,card.actionKey]):"";
+      if(semanticKey!==overlayActionKey){
+        overlayActionKey=semanticKey;
+        overlayAction=semanticKey?{id:"overlay-"+(++overlayActionSerial),action:card.action,key:card.actionKey}:null;
+      }
+      const message=card?{type:"recommendation-overlay",processId:snapshot.processId,timestamp:snapshot.timestamp,
+        title:card.title,detail:card.detail,percent:card.percent??null,action:card.action??null,actionId:overlayAction?.id??null}:{type:"recommendation-overlay"};
+      const key=JSON.stringify(message);
+      if(key===lastOverlayMessage)return;
+      try{bridge.postMessage(message);lastOverlayMessage=key;}catch{}
+    }
+    function onOverlayAction(event){
+      const message=event.data;
+      if(destroyed||message?.type!=="recommendation-overlay-action"||!overlayAction||message.actionId!==overlayAction.id||!connected()||state.snapshot.progression?.gameEnded===true)return;
+      const card=panel.overlayRecommendation(),action=overlayAction;
+      const currentKey=card?.action?JSON.stringify([session,state.snapshot.processId,state.snapshot.sessionIdentity,revision,activeRecordsRevision,card.action,card.actionKey]):"";
+      if(currentKey!==overlayActionKey)return;
+      overlayAction=null;overlayActionKey="";activeOverlayDispatchId=action.id;
+      try{panel.requestOverlayAction(action.action,action.key,action.id);}
+      finally{activeOverlayDispatchId=null;publishOverlay();}
+    }
+    overlayBridge?.addEventListener?.("message",onOverlayAction);
     function show(error) {
-      panel.update({catalog:state?.catalog,result:connected() ? result : null, connected:connected(), calculating:connected() && (loading || Boolean(recordUpdateInFlight)||Boolean(pendingRecordsSnapshot)&&!state?.craftRunning || (busy || Boolean(pending)) && (blockingRecompute || !result)),
+      panel.update({catalog:state?.catalog,result:connected() ? result : null, connected:connected(), priorityAction, calculating:connected() && (loading || Boolean(recordUpdateInFlight)||Boolean(pendingRecordsSnapshot)&&!state?.craftRunning || (busy || Boolean(pending)) && (blockingRecompute || !result)),
         error:error || null,craftRunning:Boolean(state?.craftRunning),craftStopRequested:Boolean(state?.craftStopRequested),craftCanStop:state?.capabilities?.stopCraftSupported===true,craftMessage:state?.craftMessage||"",
         craftTone:state?.craftTone||"",craftAvailable:state?.capabilities?.enabled===true&&Boolean(state?.capabilities?.token)&&state?.capabilities?.protectedCountsSupported===true&&state?.capabilities?.exactPlanSupported===true,
         elder:state?.snapshot?.elder||null,items:readItems(),rewardBudget:readRewardBudget(),randomHistory:readRandomHistory(),localPlayer:state?.snapshot?.localPlayer,itemCraftAvailable:state?.capabilities?.itemRequirementsSupported===true,readableItemRawcodes:Array.from(state?.capabilities?.readableItemRawcodes||[]),recipeConditions:readRecipeConditions(),recipeConditionsAvailable:state?.capabilities?.recipeConditionsSupported===true,specialRecipeConditionsAvailable:state?.capabilities?.specialRecipeConditionsSupported===true,readableConditionTypes:readableRecipeConditions()});
+      publishOverlay();
+      if(typeof options.onUiState==="function"){
+        const card=panel.overlayRecommendation(),hasGoal=Boolean(result?.targetDeck||result?.earlyStory);
+        const calculating=Boolean(connected()&&(loading||recordUpdateInFlight||pendingRecordsSnapshot&&!state?.craftRunning||(busy||pending)&&(blockingRecompute||!result)));
+        options.onUiState({scope:"advisor",enabled:card?.action==="craft"?1:0,total:hasGoal||card?.action==="craft"?1:0,
+          connected:connected(),craftRunning:Boolean(state?.craftRunning),calculating,blocked:{}});
+      }
       options.onCraftContextChange?.();
     }
     function initialize() {
@@ -247,8 +287,8 @@
         stopWorker(); pending = null; result = null; failed = true;
         show("추천을 불러오지 못했어요. 다시 계산해 주세요.");
       };
-      try { worker.postMessage({type:"init", catalog:state.catalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,
-        ...(nativeData?{randomDrops,combatValidation,storyRankings}:{}),recordsRevision:activeRecordsRevision}); }
+      try { worker.postMessage({type:"init", catalog:state.catalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,
+        ...(nativeData?{randomDrops,combatValidation}:{}),recordsRevision:activeRecordsRevision}); }
       catch {
         stopWorker(); pending = null; result = null; failed = true;
         show("추천을 불러오지 못했어요. 다시 계산해 주세요."); return false;
@@ -291,8 +331,9 @@
       const catalogUnits = Array.isArray(state.catalog.units) ? state.catalog.units : null;
       const resourceCodes=["e018","e0IX",...(rewardData?.randomSourceRawcodes||[]),...(combat?.acquisitionModel?.sharedChoiceResources||[]).map(item=>item.sourceRawcode)].filter(code=>typeof code==="string"&&/^[A-Za-z0-9]{4}$/.test(code));
       const combatTransientCodes=new Set(["h06O","h0C5"]),referencedCodes=new Set(resourceCodes);
+      const excludedSummons=new Set(["h076","h04T","h04Y","h05D","h0CA"]);
       for(const recipe of state.catalog.recipes||[]){if(typeof recipe.resultUnitRawcode==="string")referencedCodes.add(recipe.resultUnitRawcode);for(const item of recipe.ingredients||[])if(item.type==="UNIT"&&typeof item.rawcode==="string")referencedCodes.add(item.rawcode);}
-      const relevantTransient=code=>!combatTransientCodes.has(code)||referencedCodes.has(code);
+      const relevantTransient=code=>!excludedSummons.has(code)&&(!combatTransientCodes.has(code)||referencedCodes.has(code));
       const inventoryCodes = catalogUnits ? new Set(catalogUnits.filter(unit=>unit.playable===true&&relevantTransient(unit.rawcode)||combatTransientCodes.has(unit.rawcode)&&referencedCodes.has(unit.rawcode)).map(unit=>unit.rawcode).concat(resourceCodes)) : null;
       const inventory = new Map(Array.from(state.counts).filter(([code,count])=>count>0&&relevantTransient(code)&&(!inventoryCodes||inventoryCodes.has(code))));
       const investmentUnits = new Map((catalogUnits||[]).filter(unit=>unit.playable===true&&["전설","히든"].includes(unit.tier)&&!["h076","h04T","h04Y","h05D","h0CA","h0C8"].includes(unit.rawcode)).map(unit=>[unit.rawcode,unit]));
@@ -323,10 +364,13 @@
       const resource=state.snapshot.resources;
       const resourceConfirmed=resource?.status==="confirmed"&&Number.isInteger(state.snapshot.localPlayer)&&resource.localPlayer===state.snapshot.localPlayer;
       const amount=value=>resourceConfirmed&&Number.isSafeInteger(value)&&value>=0?value:null;
-      const rewardBudget=readRewardBudget(),round=Number.isSafeInteger(rewardBudget.round)&&rewardBudget.round>=0?rewardBudget.round:null;
+      const rewardBudget=readRewardBudget();
+      const classicProgression=root.OrdNightmarePanel.confirmedClassicProgression?.(state.catalog,state.snapshot);
+      const round=Number.isSafeInteger(rewardBudget.round)&&rewardBudget.round>=0?rewardBudget.round:classicProgression?.round??null;
+      const materialStarter=Boolean(classicProgression&&classicProgression.round<30&&classicProgression.storyIndex<14);
       if(panel.getSettings().round!==round)panel.setSettings({round},{notify:false});
       const settings = {...panel.getSettings(),wood:amount(resource?.wood),gold:amount(resource?.gold),firstInvestmentRawcode:firstInvestment?.rawcode||null,firstInvestmentEvidence:firstInvestment?.evidence||null,firstInvestmentAmbiguous:investmentAmbiguous,
-        firstLegendRawcode:firstInvestment?.tier==="전설"?firstInvestment.rawcode:null,firstLegendEvidence:firstInvestment?.tier==="전설"?(firstInvestment.evidence==="single_advanced_unit_at_attach"?"single_legend_at_attach":"first_observed_legend_creation"):null,manualDeckChoice,manualDeckChoiceRevision,
+        firstLegendRawcode:firstInvestment?.tier==="전설"?firstInvestment.rawcode:null,firstLegendEvidence:firstInvestment?.tier==="전설"?(firstInvestment.evidence==="single_advanced_unit_at_attach"?"single_legend_at_attach":"first_observed_legend_creation"):null,manualDeckChoice,manualDeckChoiceRevision,materialStarter,
         craftRunning:state.craftRunning===true,activeCraftTarget:state.activeCraftTarget||null,activeCraftExpectedResults:Array.isArray(state.activeCraftExpectedResults)?state.activeCraftExpectedResults:[],protectedCounts:Object.fromEntries(Object.entries(state.protectedCounts||{}).sort(([a],[b])=>a.localeCompare(b))),items:readItems(),rewardBudget,randomHistory:readRandomHistory(),localPlayer:state.snapshot.localPlayer,itemRequirementsSupported:state.capabilities?.itemRequirementsSupported===true,readableItemRawcodes:Array.from(state.capabilities?.readableItemRawcodes||[]).sort(),recipeConditions:readRecipeConditions(),recipeConditionsSupported:state.capabilities?.recipeConditionsSupported===true,specialRecipeConditionsSupported:state.capabilities?.specialRecipeConditionsSupported===true,readableConditionTypes:readableRecipeConditions().sort()};
       const supported = Array.from(state.capabilities?.supportedRecipeIds || []).sort();
       const semanticSettings={...settings};delete semanticSettings.wood;delete semanticSettings.gold;
@@ -385,7 +429,11 @@
     return {
       update(next) {
         const changed=state?.craftRunning!==next.craftRunning||state?.craftStopRequested!==next.craftStopRequested||state?.capabilities?.stopCraftSupported!==next.capabilities?.stopCraftSupported||state?.craftMessage!==next.craftMessage||state?.craftTone!==next.craftTone||state?.capabilities?.protectedCountsSupported!==next.capabilities?.protectedCountsSupported||state?.capabilities?.exactPlanSupported!==next.capabilities?.exactPlanSupported;
-        state = next;startRecordPolling();if(!applyRecordUpdate())schedule(false);if(changed)show();
+        state=next;
+        const action=connected()?root.OrdNightmarePanel.progressionAction?.(next.catalog,next.snapshot,next.counts)??null:null;
+        const priorityChanged=priorityAction?.title!==action?.title||priorityAction?.detail!==action?.detail;
+        priorityAction=action;
+        startRecordPolling();if(!applyRecordUpdate())schedule(false);if(changed||priorityChanged)show();else publishOverlay();
       },
       setExpanded:open => panel.setExpanded(open),
       getCraftContext() {
@@ -399,7 +447,7 @@
         for(const goal of early?[]:result.targetDeck.goals||[]){const count=Math.min(Number(goal.count)||1,state.counts.get(goal.rawcode)||0);if(count>0)automaticProtectedCounts[goal.rawcode]=Math.max(automaticProtectedCounts[goal.rawcode]||0,count);}
         return {deckId:early?"early-story":result.targetDeck.id,automaticProtectedCounts,explicitProtectedCounts:{...(state.protectedCounts||{})}};
       },
-      destroy() { destroyed = true; clearInterval(staleTimer);if(recordPollTimer)clearInterval(recordPollTimer);recordFetchAbort?.abort();pendingRecordsSnapshot=null;if (timer) clearTimeout(timer); stopWorker(); panel.destroy(); }
+      destroy() { destroyed = true;overlayBridge?.removeEventListener?.("message",onOverlayAction);publishOverlay(); clearInterval(staleTimer);if(recordPollTimer)clearInterval(recordPollTimer);recordFetchAbort?.abort();pendingRecordsSnapshot=null;if (timer) clearTimeout(timer); stopWorker(); panel.destroy(); }
     };
   }
   root.OrdNightmareIntegration = {create,validNativeRecord,mergeLocalRecords};

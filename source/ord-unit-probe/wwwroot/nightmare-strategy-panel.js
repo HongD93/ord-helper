@@ -6,11 +6,41 @@ const itemNames={AI00:"우타의 헤드셋",AI01:"태양신의 흔적",AI02:"불
 const nextTiers=new Set(["희귀","전설","히든","초월","불멸","제한","영원","신비","특수","변화","왜곡","세라핌"]);
 const finalTiers=new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]);
 const list=value=>Array.isArray(value)?value:[];
+const nextCraft=result=>list(result?.craftTargets).find(target=>nextTiers.has(target.tier)&&target.playable!==false&&target.isSummon!==true);
 const text=value=>typeof value==="string"?value.trim():"";
 const code=value=>typeof value==="string"&&/^[A-Za-z0-9]{4}$/.test(value);
 const finite=value=>typeof value==="number"&&Number.isFinite(value);
 const kingPathModes=new Set(["off","standard","martial_law"]);
 const reinforcementRoles=new Set(["auto","stun","physical_shred","magic_shred"]);
+const classic2331="20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+const classic2331Script="308258a35af767807cabcc595f0f9513ff1aea52c82bcc0171dbdae6239fef13";
+const priorityWisps=[["e015","전설 위습"],["e019","희귀 위습"],["e016","특별 위습"]];
+function confirmedClassicProgression(catalog,snapshot){
+ const progression=snapshot?.progression,source=progression?.source,player=snapshot?.localPlayer;
+ if(catalog?.map?.sha256!==classic2331||snapshot?.loadedMapHash!==classic2331||
+    snapshot.catalogMatchesLoadedArchive!==true||snapshot.status!=="snapshot_read"||
+    snapshot.stableRoots!==true||snapshot.stableUnits!==true||snapshot.readErrors!==0||
+    !Number.isSafeInteger(player)||player<0||player>3||progression?.localPlayer!==player||
+    progression.status!=="confirmed"||progression.activePlayer!==true||progression.gameEnded!==false||
+    progression.difficulty!=="nightmare"||progression.difficultyValue!==6||source?.readOnly!==true||
+    source.mapSha256!==classic2331||source.scriptSha256!==classic2331Script)return null;
+ const round=progression.round,story=progression.storyIndex;
+ if(!Number.isSafeInteger(round)||round<1||round>65||!Number.isSafeInteger(story)||story<1||story>14)return null;
+ return progression;
+}
+function progressionAction(catalog,snapshot,counts){
+ const progression=confirmedClassicProgression(catalog,snapshot);
+ if(!progression)return null;
+ const round=progression.round,story=progression.storyIndex;
+ // qf는 현재 스토리 번호다. 14부터 와노쿠니 완료로 본다.
+ if(round>=30&&round<=35&&story<=13)
+  return {title:"스토리 먼저 진행",detail:"35라운드까지 와노쿠니 · "+(story-1)+"/13 완료"};
+ for(const [rawcode,name] of priorityWisps){
+  const count=counts?.get(rawcode);
+  if(Number.isSafeInteger(count)&&count>0)return {title:name+" 먼저 사용",detail:"보유 "+count+"기 · 나온 패로 다음 조합 추천"};
+ }
+ return null;
+}
 function normalize(value){
  const optional=(n,min)=>n===null||n===undefined||n===""?null:Number.isFinite(Number(n))&&Number(n)>=min?Math.floor(Number(n)):null;
  const kingPathMode=Object.hasOwn(value,"kingPathMode")?(kingPathModes.has(value.kingPathMode)?value.kingPathMode:"off"):value.includeKingPathDecks===true?"standard":"off";
@@ -61,10 +91,11 @@ function create(options){
   return target;
  }
  const enabled=(target,scope)=>{const independent=scope==="reinforcement"&&reinforcementTargetFor(target?.rawcode)===target;return Boolean(target&&(scope!=="reinforcement"||independent)&&itemReady(target)&&conditionsReady(target)&&target.available!==false&&code(target.rawcode)&&text(target.recipeId)&&list(target.expectedSteps).length&&target.expectedSteps.length<=64&&target.resourcesReady!==false&&(independent||state.result?.targetDeck?.acquisitionPlan?.sharedChoiceFeasible!==false&&state.result?.targetDeck?.assessment?.compositionStatus!=="incomplete")&&state.connected&&state.craftAvailable&&!state.calculating&&!state.error&&!busy()&&typeof options.onCraftTarget==="function");};
- function request(target,goalRawcode,scope){
-  if(destroyed||!enabled(target,scope)||(goalRawcode&&(target.rawcode!==goalRawcode||target.isWholeGoal===false)))return;pending=true;localError="";render();
-  try{Promise.resolve(scope==="reinforcement"?options.onCraftTarget(target.rawcode,goalRawcode,"reinforcement"):options.onCraftTarget(target.rawcode,goalRawcode)).catch(()=>{localError="조합하지 못했습니다.";}).finally(()=>{pending=false;render();});}
+ function request(target,goalRawcode,scope,actionOptions){
+  if(destroyed||!enabled(target,scope)||(goalRawcode&&(target.rawcode!==goalRawcode||target.isWholeGoal===false)))return false;pending=true;localError="";render();
+  try{Promise.resolve(options.onCraftTarget(target.rawcode,goalRawcode,scope==="reinforcement"?"reinforcement":undefined,actionOptions)).catch(()=>{localError="조합하지 못했습니다.";}).finally(()=>{pending=false;render();});}
   catch{pending=false;localError="조합하지 못했습니다.";render();}
+  return true;
  }
  function cost(target){const result=[];if(finite(target?.choiceWisps)&&target.choiceWisps>0)result.push("선위 "+target.choiceWisps);if(finite(target?.wood)&&target.wood>0)result.push("목재 "+target.wood);if(target?.resourcesReady===false)result.push("자원 부족");return result.join(" · ");}
  function probabilityRange(value){
@@ -92,13 +123,19 @@ function create(options){
  function appendStop(head){if(state.craftRunning&&state.craftCanStop&&typeof options.onStopCraft==="function"){const stop=el("button","ord-na-action",state.craftStopRequested?"중지 요청 중":"중지");stop.type="button";stop.disabled=state.craftStopRequested===true;stop.setAttribute("aria-label","조합 중지");stop.addEventListener("click",()=>{if(stop.disabled||destroyed)return;try{Promise.resolve(options.onStopCraft()).catch(()=>{localError="중지 요청을 보내지 못했습니다.";render();});}catch{localError="중지 요청을 보내지 못했습니다.";render();}});head.append(stop);}}
  function appendCraftMessage(){const message=localError||text(state.craftMessage)||(busy()?"조합 중":"");if(message){const safe=message.length<=180&&!/[A-Za-z]:[\\/]|stacktrace|\bat \w+[.(]/i.test(message)?message:"조합 상태를 확인해 주세요.";const status=el("div","ord-na-status",safe);status.setAttribute("role","status");if(localError||state.craftTone==="error")status.dataset.tone="error";panel.append(status);}}
  function renderEarlyStory(result){
-  const head=el("div","ord-na-head"),controls=el("div","ord-na-controls");head.append(el("h2","ord-na-title","첫 스토리 유닛"));appendStop(head);appendPathControls(controls);head.append(controls);panel.append(head);
+  const materialOnly=result.earlyStory?.materialOnly===true;
+  const historicalReference=result.earlyStory?.historicalStoryReference===true;
+  const head=el("div","ord-na-head"),controls=el("div","ord-na-controls");head.append(el("h2","ord-na-title",materialOnly?"첫 전설·히든":"첫 스토리 유닛"));
+  if(materialOnly)head.append(el("span","ord-na-chip",historicalReference?"이전 순위 참고":"재료 기준"));
+  appendStop(head);appendPathControls(controls);head.append(controls);panel.append(head);
   const native=new Map(list(state.catalog?.units).map(unit=>[unit.rawcode,unit])),seen=new Set(),grid=el("div","ord-na-roster"),candidates=list(result.earlyStory?.candidates).filter(candidate=>{const unit=native.get(candidate?.rawcode);if(!code(candidate?.rawcode)||seen.has(candidate.rawcode)||unit?.playable!==true||!["전설","히든"].includes(unit.tier))return false;seen.add(candidate.rawcode);return true;}).slice(0,3);
   for(const [index,candidate]of candidates.entries()){
    const unit=native.get(candidate.rawcode),unitName=unitText(unit,text(unit.displayName||unit.properName||unit.name)||"유닛")+" ("+unit.tier+")",owned=Number.isSafeInteger(candidate.owned)&&candidate.owned>=0?candidate.owned:0,required=Number.isSafeInteger(candidate.count)&&candidate.count>0?candidate.count:1,done=owned>=required,row=el("div","ord-na-unit"+(done?" ord-na-owned":"")),name=el("button","ord-na-name"),progress=candidate.progress,bound=value=>Math.max(0,Math.min(100,value));
    if(finite(progress?.percent)){const percent=done?100:bound(progress.percent),reachable=done?100:Math.max(percent,bound(finite(progress.choiceReachablePercent)?progress.choiceReachablePercent:percent)),track=el("span","ord-na-progress"),current=el("span","ord-na-progress-current"),choice=el("span","ord-na-progress-choice");current.style.width=percent+"%";choice.style.left=percent+"%";choice.style.width=reachable-percent+"%";choice.dataset.ready=String(progress.canCompleteWithChoiceWisp===true&&reachable>=100);track.append(current,choice);name.append(track,el("span","",Math.round(percent)+"% "+unitName));}else name.textContent=unitName;
    name.type="button";name.disabled=typeof options.onOpenUnit!=="function";name.setAttribute("aria-label",unitName+" 상세");name.addEventListener("click",()=>{if(!destroyed&&!name.disabled)options.onOpenUnit(candidate.rawcode);});row.append(el("span","ord-na-number",index+1),name,el("span","ord-na-count","보유 "+owned+" / "+required));
-   if(!done){const candidateTarget=goalTargetFor(candidate.rawcode),last=list(candidateTarget?.expectedSteps).at(-1),whole=candidateTarget?.isWholeGoal===true&&candidateTarget.towardRawcode===candidate.rawcode&&candidateTarget.available===true&&candidateTarget.protectedCounts&&typeof candidateTarget.protectedCounts==="object"&&!Array.isArray(candidateTarget.protectedCounts)&&last?.type==="craft"&&list(state.catalog?.recipes).some(recipe=>String(recipe.id)===String(last.recipeId)&&recipe.resultUnitRawcode===candidate.rawcode),target=whole?candidateTarget:null,action=el("button","ord-na-action","조합");action.type="button";action.disabled=!enabled(target);action.setAttribute("aria-label",unitName+" 조합");action.title=enabled(target)?"필요한 재료부터 "+unitText(unit,text(unit.displayName)||"목표 유닛")+"까지 조합":"현재는 조합할 수 없습니다.";action.addEventListener("click",()=>request(target,candidate.rawcode));row.append(action);}row.append(el("span","ord-na-unit-state",done?"보유":"대기"));grid.append(row);
+   if(!done){const candidateTarget=goalTargetFor(candidate.rawcode),last=list(candidateTarget?.expectedSteps).at(-1),whole=candidateTarget?.isWholeGoal===true&&candidateTarget.towardRawcode===candidate.rawcode&&candidateTarget.available===true&&candidateTarget.protectedCounts&&typeof candidateTarget.protectedCounts==="object"&&!Array.isArray(candidateTarget.protectedCounts)&&last?.type==="craft"&&list(state.catalog?.recipes).some(recipe=>String(recipe.id)===String(last.recipeId)&&recipe.resultUnitRawcode===candidate.rawcode),target=whole?candidateTarget:null,action=el("button","ord-na-action","조합");action.type="button";action.disabled=!enabled(target);action.setAttribute("aria-label",unitName+" 조합");action.title=enabled(target)?"필요한 재료부터 "+unitText(unit,text(unit.displayName)||"목표 유닛")+"까지 조합":"현재는 조합할 수 없습니다.";action.addEventListener("click",()=>request(target,candidate.rawcode));row.append(action);}
+   const referenceRank=historicalReference&&Number.isSafeInteger(candidate.storyRank)&&candidate.storyRank>0?"참고 "+candidate.storyRank+"위":null;
+   row.append(el("span","ord-na-unit-state",done?"보유":referenceRank||"대기"));grid.append(row);
   }
   panel.append(grid);appendCraftMessage();
  }
@@ -122,6 +159,12 @@ function create(options){
   if(deckSelectionActive&&state.connected&&!state.craftRunning){queuedRender=true;return;}
   deckSelectionActive=false;deckSelectionNode=null;queuedRender=false;panel.replaceChildren();
   if(!state.connected){panel.append(el("div","ord-na-empty","게임 연결 대기"));return;}
+  if(!state.craftRunning&&state.priorityAction){
+   const {title,detail}=state.priorityAction;
+   const action=el("div","ord-na-next");
+   action.append(el("span","ord-na-next-label","지금 할 일"),el("strong","",title),el("span","ord-na-next-cost",detail));
+   panel.append(action);
+  }
   if(state.result?.phase==="early_story"&&state.result.mapCompatible!==false){renderEarlyStory(state.result);return;}
   const result=state.result,deck=result?.targetDeck,head=el("div","ord-na-head");head.append(el("h2","ord-na-title","목표 덱"));
   appendStop(head);
@@ -228,15 +271,46 @@ function create(options){
   if(deck.assessment?.compositionStatus==="incomplete")panel.append(el("div","ord-na-status","목표 덱 구성이 부족합니다. 다른 덱을 선택해 주세요."));
   const future=list(deck.acquisitionPlan?.remainingMaterials||deck.planning?.forecast?.futureMaterials).filter(item=>finite(item.count)&&item.count>0);
   if(future.length){const names=future.map(item=>unitText(item,item.rawcode==="h04S"?"초월 쿠마":text(item.name)||"별도 재료")+" "+item.count);panel.append(el("div","ord-na-next-cost","별도 재료 · "+names.join(" · ")));}
-  const next=list(result.craftTargets).find(target=>nextTiers.has(target.tier)&&target.playable!==false&&target.isSummon!==true);
+  const next=nextCraft(result);
   if(next){const row=el("div","ord-na-next"),name=el("button","ord-na-next-name",unitText(next,text(next.name)||"다음 유닛")),action=el("button","ord-na-action","조합");name.type=action.type="button";name.disabled=action.disabled=!enabled(next);name.setAttribute("aria-label",name.textContent+" 다음 제작");action.setAttribute("aria-label",name.textContent+" 다음 제작");name.addEventListener("click",()=>request(next));action.addEventListener("click",()=>request(next));row.append(el("span","ord-na-next-label","다음 제작"),name,el("span","ord-na-next-cost",cost(next)),action);panel.append(row);}
   const opportunities=list(result.ownedOpportunities);
   if(opportunities.length){const details=el("details","ord-na-condition"),ul=el("ul");details.append(el("summary","","신비함 대안"));for(const item of opportunities){const candidate=alternatives.find(d=>list(item.templateIds).includes(d.id)&&d.mode===deck.mode)||alternatives.find(d=>list(item.templateIds).includes(d.id)),li=el("li"),button=el("button","ord-na-name",unitText(item,text(item.name)||"신비함"));button.type="button";button.disabled=!candidate||busy()||state.calculating;button.setAttribute("aria-label",button.textContent+" 활용 덱 비교");button.addEventListener("click",()=>{if(candidate&&!button.disabled)setSettings({preferredDeckId:candidate.id},{notify:true});});li.append(button,el("span",""," · "+(item.ownedResult>0?"보유 "+item.ownedResult:"재료 "+(item.ownedSource||0))+(item.ownedResult>0?"":item.automaticCraftSupported?"":" · 수동 조합")));ul.append(li);}details.append(ul);panel.append(details);}
   renderReinforcements(result);appendCraftMessage();
  }
   function setSettings(patch,config={}){if(destroyed)return;const values={...settings,...patch};if(!Object.hasOwn(patch,"kingPathMode")&&Object.hasOwn(patch,"includeKingPathDecks"))values.kingPathMode=patch.includeKingPathDecks===true?"standard":"off";const next=normalize(values),changed=JSON.stringify(next)!==JSON.stringify(settings);if(next.kingPathMode!==settings.kingPathMode){try{root.localStorage?.setItem(kingPathStorageKey,JSON.stringify(next.kingPathMode));}catch{}}if(next.includeMysteriousDecks!==settings.includeMysteriousDecks){try{root.localStorage?.setItem(mysteriousStorageKey,JSON.stringify(next.includeMysteriousDecks));}catch{}}settings=next;if(changed)render();if(config.notify&&changed)options.onSettingsChange?.({...settings});}
- render();return Object.freeze({update(value={}){if(destroyed)return;state={...state,...value};if(!state.connected)state.result=null;if(Object.hasOwn(value,"craftMessage"))localError="";render();},setSettings,getSettings:()=>({...settings}),setExpanded(){},destroy(){destroyed=true;panel.remove();}});
+ function overlayRecommendation(){
+  if(destroyed||!state.connected)return null;
+  if(state.craftRunning)return {title:"조합 중",detail:state.craftStopRequested?"중지 요청 중":"결과를 확인한 뒤 다시 추천합니다.",percent:null,
+   action:state.craftCanStop===true&&!state.craftStopRequested&&typeof options.onStopCraft==="function"?"stop":null,actionKey:"stop"};
+  if(state.priorityAction)return {...state.priorityAction,percent:null,action:null,actionKey:null};
+  if(state.error||state.result?.mapCompatible===false)return null;
+  const target=nextCraft(state.result);
+  const goals=state.result?.phase==="early_story"?list(state.result.earlyStory?.candidates):list(state.result?.targetDeck?.goals);
+  const goal=goals.find(candidate=>candidate.rawcode===(target?.towardRawcode||target?.rawcode))||goals.find(candidate=>(candidate.owned||0)<(candidate.count||1));
+  const unit=goal||target;
+  const name=unitText(unit,text(unit?.name)||"");
+  if(!name)return null;
+  const progress=goals.find(candidate=>candidate.rawcode===target?.rawcode)?.progress||goal?.progress;
+  const percent=finite(progress?.percent)?Math.round(Math.max(0,Math.min(100,progress.percent))):null;
+  const early=state.result.phase==="early_story"?state.result.earlyStory:null;
+  const purpose=early?.historicalStoryReference===true&&Number.isSafeInteger(goal?.storyRank)?"스토리 참고 "+goal.storyRank+"위":
+   early?(early.materialOnly?"첫 전설·히든 · 재료 기준":"초반 스토리 준비"):"목표 덱 제작 순서";
+  const next=target&&target.rawcode!==unit?.rawcode?"다음 "+unitText(target,text(target.name)||""):null;
+  return {title:name+" 조합",detail:[purpose,next,cost(target)].filter(Boolean).join(" · "),percent,
+   action:enabled(target)?"craft":null,actionKey:target?JSON.stringify(target):null};
+ }
+ function requestOverlayAction(action,actionKey,actionId){
+  const current=overlayRecommendation();
+  if(!current||current.action!==action||current.actionKey!==actionKey)return false;
+  if(action==="stop"){
+   try{Promise.resolve(options.onStopCraft()).catch(()=>{localError="중지 요청을 보내지 못했습니다.";render();});}
+   catch{localError="중지 요청을 보내지 못했습니다.";render();}
+   return true;
+  }
+  return action==="craft"&&request(nextCraft(state.result),undefined,undefined,{overlayActionId:actionId});
+ }
+ render();return Object.freeze({update(value={}){if(destroyed)return;state={...state,...value};if(!state.connected)state.result=null;if(Object.hasOwn(value,"craftMessage"))localError="";render();},overlayRecommendation,requestOverlayAction,setSettings,getSettings:()=>({...settings}),setExpanded(){},destroy(){destroyed=true;panel.remove();}});
 }
-root.OrdNightmarePanel=Object.freeze({create});
+root.OrdNightmarePanel=Object.freeze({create,progressionAction,confirmedClassicProgression});
 })(typeof window!=="undefined"?window:globalThis);
 

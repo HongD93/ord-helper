@@ -199,7 +199,14 @@ function create(catalog,combat,data,options={}){
  function templates(counts,settings={}){
    const stock=stockOf(counts),result=[],locked=[],missingRandomTemplates=[];
    if(!compatible)return {templates:[],missingRandomTemplates:[],lockedRecords:[],compatible:false};
-  const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)),handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
+  const kingMode=Object.hasOwn(settings,"kingPathMode")?settings.kingPathMode:settings.includeKingPathDecks===true?"standard":"off";
+  const groups=new Set();
+  if(kingMode==="standard")groups.add("king_path");
+  if(kingMode==="martial_law")groups.add("martial_law");
+  if(settings.includeMysteriousDecks===true)groups.add("mysterious");
+  if(kingMode==="off"&&settings.includeMysteriousDecks!==true)groups.add("normal");
+  const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)&&
+    (r.recommendationGroup==null||groups.has(r.recommendationGroup))),handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
   const selectable=usesHandFit?matching.filter(record=>{let value=null;try{value=handFitAdvisor.preselectionScore(record,stock,settings);}catch{}if(value===-1)return false;affinities.set(record,typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=1?value:null);return true;}):matching;
   const legacy=selectable.filter(r=>r.sourceProvider!=="tmo"),live=selectable.filter(r=>r.sourceProvider==="tmo");
   const limit=Number.isSafeInteger(options.liveTemplateLimit)?Math.max(16,Math.min(256,options.liveTemplateLimit)):96;
