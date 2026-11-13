@@ -822,7 +822,7 @@ async function loadCatalog(){
     const [response,metadata,descriptions]=await Promise.all([fetch("/data/map-catalog.json",{cache:"no-store"}),fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),fetchNativeUnitDescriptions()]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
-    catalog=data;combatMetadata=metadata&&metadata.units&&Array.isArray(metadata.groups)?metadata:null;nativeUnitDescriptions=descriptions;
+    catalog=data;combatMetadata=metadata?.mapSha256===data.map?.sha256&&metadata.units&&Array.isArray(metadata.groups)?metadata:null;nativeUnitDescriptions=descriptions;
     const wispSettings=combatMetadata?.wispMetadata;
     recipeGraph=window.OrdRecipeGraph?.create(data,{choiceWispRawcode:wispSettings?.commonChoiceRawcode||"e018",...(wispSettings?.verified&&Array.isArray(wispSettings.replacements)?{choiceEligibleRawcodes:wispSettings.replacements}:{})})||null;
     startingEvolutionForecast=window.OrdStartingEvolutionForecast?.create(data,{recipeGraph})||null;

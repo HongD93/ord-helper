@@ -1,5 +1,40 @@
 (function (root) {
   "use strict";
+  const evidenceHash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value);
+  const nativeRunId=value=>typeof value==="string"&&/^auto-\d{8}T\d{13}Z-[a-f0-9]{16}$/.test(value);
+  const nativeRoster=rows=>Array.isArray(rows)?rows.map(row=>[row?.rawcode,row?.count]).sort(([left],[right])=>String(left)<String(right)?-1:String(left)>String(right)?1:0):null;
+  function validNativeRecord(record,catalog){
+    const proof=record?.localNativeProof,version=record?.version,units=new Set((catalog?.units||[]).map(unit=>unit.rawcode)),mapHash=catalog?.map?.sha256;
+    if(record?.sourceProvider!=="local-native"||record.sourceOutcome!=="local_native_victory_confirmed"||record.id!=="local-"+proof?.canonicalRunId||record.sourceUrl!=null||!Array.isArray(record.sourceUrls)||record.sourceUrls.length||!Array.isArray(record.sourceRecordIds)||record.sourceRecordIds.length!==1||record.sourceRecordIds[0]!==record.id||record.rosterComplete!==true||record.fullRosterCountsVerified!==true)return false;
+    if(proof?.schemaVersion!==1||proof.kind!=="verified_native_clear"||!nativeRunId(proof.canonicalRunId)||![proof.automaticRunSha256,proof.clearRecordSha256,proof.finalInventorySha256,proof.catalogMapHash].every(evidenceHash)||proof.catalogMapHash!==mapHash||proof.nativeVictoryConfirmed!==true||proof.terminalRound!==65||!Array.isArray(proof.roster)||!proof.roster.length)return false;
+    const mapVersion=String(catalog.map?.version||"").match(/^(\d+\.\d{3})(?:\[([^\]]+)\])?$/);
+    if(!mapVersion||proof.versionNumber!==mapVersion[1]||proof.variant!==(mapVersion[2]||null)||version?.number!==proof.versionNumber||version.variant!==proof.variant||version.numericVerified!==true||version.sourceNumericVersionVerified!==true||version.source!=="verified_native_loaded_map"||version.assumedByUser===true||version.datePolicyApplied===true)return false;
+    const terminal=Date.parse(proof.terminalObservedAt),active=Date.parse(proof.lastActiveObservedAt);
+    if(!Number.isFinite(terminal)||!Number.isFinite(active)||terminal<active||terminal-active>2000||!Array.isArray(record.entries)||!Array.isArray(record.goals))return false;
+    const validRows=rows=>rows.length<=512&&rows.every(row=>units.has(row?.rawcode)&&Number.isSafeInteger(row.count)&&row.count>0&&row.count<=1000000)&&new Set(rows.map(row=>row.rawcode)).size===rows.length;
+    if(!validRows(proof.roster)||!validRows(record.goals))return false;
+    const entries=record.entries.filter(row=>!["context_only","excluded_summon"].includes(row?.status));
+    if(!validRows(entries)||JSON.stringify(nativeRoster(proof.roster))!==JSON.stringify(nativeRoster(record.goals))||JSON.stringify(nativeRoster(proof.roster))!==JSON.stringify(nativeRoster(entries)))return false;
+    return entries.every(row=>{const quantity=row.quantityEvidence;return row.countVerified===true&&row.countMeaning==="verified_native_quantity"&&quantity?.kind==="verified_native_last_active_quantity"&&quantity.sourceProvider==="local-native"&&quantity.sourceCountVerified===true&&quantity.canonicalRunId===proof.canonicalRunId&&quantity.automaticRunSha256===proof.automaticRunSha256&&quantity.finalInventorySha256===proof.finalInventorySha256&&quantity.catalogMapHash===mapHash&&quantity.rawcode===row.rawcode&&quantity.count===row.count;});
+  }
+  function sameNativeRun(left,right){
+    const a=left.localNativeProof,b=right.localNativeProof;
+    return a.canonicalRunId===b.canonicalRunId&&a.automaticRunSha256===b.automaticRunSha256&&a.catalogMapHash===b.catalogMapHash&&a.versionNumber===b.versionNumber&&a.variant===b.variant&&Date.parse(a.terminalObservedAt)===Date.parse(b.terminalObservedAt)&&Date.parse(a.lastActiveObservedAt)===Date.parse(b.lastActiveObservedAt)&&JSON.stringify(nativeRoster(a.roster))===JSON.stringify(nativeRoster(b.roster));
+  }
+  function mergeLocalRecords(publicData,localData,catalog){
+    if(publicData?.schemaVersion!==1||publicData.catalogMapHash!==catalog?.map?.sha256||!Array.isArray(publicData.records)||localData?.schemaVersion!==1||localData.catalogMapHash!==publicData.catalogMapHash||!Array.isArray(localData.records)||localData.records.length>50000)throw new TypeError("local_record_snapshot_invalid");
+    const records=publicData.records.slice(),ids=new Map(records.map(record=>[record.id,record])),runs=new Map(),seen=new Set();
+    for(const record of records)if(record.sourceProvider==="local-native"&&validNativeRecord(record,catalog)){const id=record.localNativeProof.canonicalRunId;if(runs.has(id))throw new TypeError("local_record_duplicate_source");runs.set(id,record);}
+    for(const record of localData.records.slice().sort((a,b)=>String(a?.id)<String(b?.id)?-1:String(a?.id)>String(b?.id)?1:0)){
+      if(!validNativeRecord(record,catalog)||seen.has(record.localNativeProof.canonicalRunId))throw new TypeError("local_record_proof_invalid");
+      const id=record.localNativeProof.canonicalRunId;seen.add(id);
+      const existing=runs.get(id)||ids.get(record.id);
+      if(existing){if(!validNativeRecord(existing,catalog)||!sameNativeRun(existing,record))throw new TypeError("local_record_source_conflict");continue;}
+      records.push(record);ids.set(record.id,record);runs.set(id,record);
+    }
+    if(records.length>50000)throw new TypeError("local_record_snapshot_limit");
+    return records.length===publicData.records.length?publicData:{...publicData,records};
+  }
   function create(options) {
     let state = null, combat = null, mechanics = null, clearRecords = null, rewardData = null, randomDrops = null, combatValidation = null, storyRankings = null, worker = null, ready = false, busy = false;
     let revision = 0, signature = "", session = "", initializedMap = "", loading = false;
@@ -7,8 +42,9 @@
     let firstInvestment = null, investmentBaseline = null, investmentAmbiguous = false, starterPhaseSeen = false, manualDeckChoice = false, manualDeckChoiceRevision = 0, lastSemanticKey = "", lastBudget = null, blockingRecompute = true, resourceRefreshPending = false;
     let activeRecordsRevision=null,pendingRecordsSnapshot=null,recordUpdateInFlight=null,recordAckTimeout=null,recordPollTimer=null,recordFetchAbort=null,recordFetchBusy=false;
     let baseRecordIds=[],recommendInFlight=null;
+    let publicRecordsData=null,publicRecordsRevision=null,localRecordsData=null,localRecordsRevision=null;
     let reinforcementRole="auto";
-    function validLiveRecords(data,manifest){
+    function validLiveRecords(data,manifest,requireBase=true){
       const catalog=state?.catalog;
       if(data?.schemaVersion!==1||data.catalogMapHash!==catalog?.map?.sha256||!Array.isArray(data.records)||data.records.length!==manifest.recordCount)return false;
       const ids=new Set(),codes=new Set((catalog.units||[]).map(unit=>unit.rawcode));
@@ -20,7 +56,7 @@
           if(name==="goals"||row.rawcode!=null)if(typeof row.rawcode!=="string"||!codes.has(row.rawcode))return false;
         }
       }
-      return baseRecordIds.every(id=>ids.has(id));
+      return !requireBase||baseRecordIds.every(id=>ids.has(id));
     }
     function applyRecordUpdate(){
       if(destroyed||!pendingRecordsSnapshot||state?.craftRunning||busy||recordUpdateInFlight)return false;
@@ -33,21 +69,37 @@
       recordAckTimeout=setTimeout(()=>{recordAckTimeout=null;recordUpdateInFlight=null;stopWorker();signature="";failed=false;schedule(true);},12000);
       return true;
     }
+    async function fetchRecordSnapshot(local,controller){
+      const manifestUrl=local?"/api/local-clear-records/manifest":"/nightmare-records-live-manifest.json";
+      const response=await fetch(manifestUrl,{cache:"no-store",signal:controller.signal});if(!response.ok)return null;
+      const manifest=await response.json(),mapHash=state?.catalog?.map?.sha256;
+      const expectedUrl=local?"/api/local-clear-records/"+manifest.revision+".json":"/nightmare-records-live-"+manifest.revision+".json";
+      if(manifest?.schemaVersion!==1||manifest.catalogMapHash!==mapHash||!evidenceHash(manifest.revision)||!Number.isSafeInteger(manifest.recordCount)||manifest.recordCount<(local?0:Math.max(1,baseRecordIds.length))||manifest.recordCount>50000||manifest.dataUrl!==expectedUrl)return null;
+      if(manifest.revision===(local?localRecordsRevision:publicRecordsRevision))return null;
+      const payload=await fetch(manifest.dataUrl,{cache:"no-store",signal:controller.signal});if(!payload.ok)return null;
+      const bytes=await payload.arrayBuffer();if(bytes.byteLength>67108864)return null;
+      const digest=Array.from(new Uint8Array(await root.crypto.subtle.digest("SHA-256",bytes)),value=>value.toString(16).padStart(2,"0")).join("");if(digest!==manifest.revision)return null;
+      const data=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));if(!validLiveRecords(data,manifest,!local))return null;
+      if(local&&!data.records.every(record=>validNativeRecord(record,state.catalog)))return null;
+      return {revision:manifest.revision,data};
+    }
     async function pollLiveRecords(){
       if(destroyed||recordFetchBusy||!clearRecords||!state?.catalog||!root.crypto?.subtle||typeof AbortController==="undefined")return;
       recordFetchBusy=true;const controller=new AbortController();recordFetchAbort=controller;
       const abortTimer=setTimeout(()=>controller.abort(),10000);
       try{
-        const response=await fetch("/nightmare-records-live-manifest.json",{cache:"no-store",signal:controller.signal});
-        if(!response.ok)return;
-        const manifest=await response.json(),mapHash=state.catalog.map?.sha256;
-        if(manifest?.schemaVersion!==1||manifest.catalogMapHash!==mapHash||typeof manifest.revision!=="string"||!/^[a-f0-9]{64}$/.test(manifest.revision)||!Number.isSafeInteger(manifest.recordCount)||manifest.recordCount<Math.max(1,baseRecordIds.length)||manifest.recordCount>50000||manifest.dataUrl!=="/nightmare-records-live-"+manifest.revision+".json")return;
-        if([activeRecordsRevision,pendingRecordsSnapshot?.revision,recordUpdateInFlight?.revision].includes(manifest.revision))return;
-        const payload=await fetch(manifest.dataUrl,{cache:"no-store",signal:controller.signal});if(!payload.ok)return;
-        const bytes=await payload.arrayBuffer();if(bytes.byteLength>67108864)return;
-        const digest=Array.from(new Uint8Array(await root.crypto.subtle.digest("SHA-256",bytes)),value=>value.toString(16).padStart(2,"0")).join("");if(digest!==manifest.revision)return;
-        const data=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));if(destroyed||controller.signal.aborted||!validLiveRecords(data,manifest))return;
-        pendingRecordsSnapshot={revision:manifest.revision,data};
+        const updates=await Promise.allSettled([fetchRecordSnapshot(false,controller),fetchRecordSnapshot(true,controller)]);
+        if(destroyed)return;
+        const publicUpdate=updates[0].status==="fulfilled"?updates[0].value:null,localUpdate=updates[1].status==="fulfilled"?updates[1].value:null;
+        const publicData=publicUpdate?.data||publicRecordsData||clearRecords,localData=localUpdate?mergeLocalRecords(localRecordsData||{schemaVersion:1,catalogMapHash:publicData.catalogMapHash,records:[]},localUpdate.data,state.catalog):localRecordsData;
+        const data=localData?mergeLocalRecords(publicData,localData,state.catalog):publicData;
+        let nextRevision=publicUpdate?.revision??publicRecordsRevision;
+        if(data!==publicData)nextRevision=Array.from(new Uint8Array(await root.crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(data)))),value=>value.toString(16).padStart(2,"0")).join("");
+        if(destroyed||data.catalogMapHash!==state?.catalog?.map?.sha256)return;
+        publicRecordsData=publicData;if(publicUpdate)publicRecordsRevision=publicUpdate.revision;
+        localRecordsData=localData;if(localUpdate)localRecordsRevision=localUpdate.revision;
+        if(!nextRevision||[activeRecordsRevision,pendingRecordsSnapshot?.revision,recordUpdateInFlight?.revision].includes(nextRevision))return;
+        pendingRecordsSnapshot={revision:nextRevision,data};
         if(!state?.craftRunning){revision++;pending=null;blockingRecompute=true;}
         applyRecordUpdate();show();
       }catch{}finally{clearTimeout(abortTimer);recordFetchBusy=false;if(recordFetchAbort===controller)recordFetchAbort=null;}
@@ -312,7 +364,7 @@
         fetch(url,{cache:"no-store"}).then(response=>{if(!response.ok)throw new Error("combat_profile_unavailable");return response.json();})
       ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData]) => {
         if (destroyed) return;
-        loading = false; combat = data; mechanics=rules;if(!activeRecordsRevision||clearRecords?.catalogMapHash!==records.catalogMapHash){clearRecords=records;activeRecordsRevision=null;}if(!baseRecordIds.length)baseRecordIds=(records.records||[]).map(record=>record.id);rewardData=rewards; randomDrops=drops; combatValidation={unitModels,scenarios,recordEvidence};storyRankings=storyData; failed = false; signature = "";startRecordPolling();schedule(true);
+        loading = false; combat = data; mechanics=rules;if(!publicRecordsData||publicRecordsData.catalogMapHash!==records.catalogMapHash){publicRecordsData=records;publicRecordsRevision=null;localRecordsData=null;localRecordsRevision=null;clearRecords=records;activeRecordsRevision=null;baseRecordIds=(records.records||[]).map(record=>record.id);}rewardData=rewards; randomDrops=drops; combatValidation={unitModels,scenarios,recordEvidence};storyRankings=storyData; failed = false; signature = "";startRecordPolling();schedule(true);
       }).catch(() => {
         if (destroyed) return;
         loading = false; failed = true; pending = null; result = null;
@@ -341,5 +393,5 @@
       destroy() { destroyed = true; clearInterval(staleTimer);if(recordPollTimer)clearInterval(recordPollTimer);recordFetchAbort?.abort();pendingRecordsSnapshot=null;if (timer) clearTimeout(timer); stopWorker(); panel.destroy(); }
     };
   }
-  root.OrdNightmareIntegration = {create};
+  root.OrdNightmareIntegration = {create,validNativeRecord,mergeLocalRecords};
 })(globalThis);

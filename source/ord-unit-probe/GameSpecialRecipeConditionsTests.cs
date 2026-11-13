@@ -9,36 +9,57 @@ static class GameSpecialRecipeConditionsTests
     {
         var passed = 0;
         void Check(bool ok, string name) { if (!ok) throw new InvalidOperationException("Special recipe: " + name); passed++; }
+        var mapCatalogPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "map-catalog.json");
+        using (var mapCatalog = JsonDocument.Parse(File.ReadAllText(mapCatalogPath)))
+        {
+            var targets = mapCatalog.RootElement.GetProperty("recipes").EnumerateArray()
+                .Where(recipe => recipe.GetProperty("ingredients").EnumerateArray().Any(item => item.GetProperty("type").GetString() == "IFCT"))
+                .Select(recipe => recipe.GetProperty("resultUnitRawcode").GetString()!).Distinct(StringComparer.Ordinal)
+                .OrderBy(code => code, StringComparer.Ordinal).ToArray();
+            Check(targets.SequenceEqual(new[] { "h03V", "h048", "h0CI", "h04U", "h09V", "h05V" }.OrderBy(code => code, StringComparer.Ordinal)),
+                "the map-wide dynamic distortion wood gate covers all six IFCT targets");
+        }
         var f = new MemoryFixture(); var known = f.Capture();
         Check(known.Status == "confirmed" && known.DistortionWoodSurcharge == 0 && known.DistortionWoodIncrement == 5 &&
             known.TransformationCount == 2 && known.SkillPoints == 7 && known.Round == 40, "named globals and native state5 retain exact zeros and scale1");
-        Check(known.NikaEnhancement is { Status: "confirmed", Stage: 0, LocalPlayer: 0 }, "NG zero is a confirmed unenhanced stage");
-        foreach (var stage in new uint[] { 1, 2 }) { f.Write(f.Data["NG"], stage); Check(f.Capture().NikaEnhancement.Stage == stage, "NG retains exact enhanced/completed stage"); }
-        f.Write(f.Data["NG"], 3); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().Status == "confirmed", "out-of-range NG cannot discard the other known conditions");
-        f = new(); f.Write(f.Nodes["NG"] + 0x20, 0); Check(f.Capture().NikaEnhancement.Stage == 0, "unallocated NG uses signature-verified native zero default");
-        f = new(); f.Write(f.Nodes["NG"] + 0x1C, 4); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().TransformationCount == 2, "NG type failure is isolated");
-        f = new(); var ngReads = 0; var ngChanged = f.Capture((address, count) => { var bytes = f.Read(address, count); if (address == f.Data["NG"] && ++ngReads == 1) f.Write(address, 1); return bytes; });
-        Check(ngChanged.NikaEnhancement.Status == "unknown" && ngChanged.Status == "confirmed", "changing NG does not become a confirmed enhancement");
-        f = new(); f.Write(MemoryFixture.Base + 0x8D17B0, 0); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().Status == "confirmed", "NG native layout mismatch is isolated");
+        Check(known.NikaEnhancement is { Status: "confirmed", Stage: 0, LocalPlayer: 0 }, "Nt zero is a confirmed unenhanced stage");
+        foreach (var stage in new uint[] { 1, 2 }) { f.Write(f.Data["Nt"], stage); Check(f.Capture().NikaEnhancement.Stage == stage, "Nt retains exact enhanced/completed stage"); }
+        f.Write(f.Data["Nt"], 3); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().Status == "confirmed", "out-of-range Nt cannot discard the other known conditions");
+        f = new(); f.Write(f.Nodes["Nt"] + 0x20, 0); Check(f.Capture().NikaEnhancement.Stage == 0, "unallocated Nt uses signature-verified native zero default");
+        f = new(nikaGlobal: "NG"); f.Write(f.Data["NG"], 1);
+        Check(f.Capture().NikaEnhancement.Status == "unknown", "the old NG name cannot confirm a Nika stage");
+        f = new(); f.Write(f.Nodes["i6"] + 0x20, 0); var lazySurcharge = f.Capture();
+        Check(lazySurcharge.Status == "confirmed" && lazySurcharge.DistortionWoodSurcharge == 0,
+            "the declared i6 array's unallocated global uses its verified JASS zero default");
+        f = new(); f.Write(f.Data["i6"] - 0x100 + 8, 0); lazySurcharge = f.Capture();
+        Check(lazySurcharge.Status == "confirmed" && lazySurcharge.DistortionWoodSurcharge == 0,
+            "an i6 array without an allocated player slot confirms the default zero");
+        f = new(); f.Put(f.Nodes["i6"] + 0x50, Encoding.ASCII.GetBytes("hX\0")); var missingSurcharge = f.Capture();
+        Check(missingSurcharge.DistortionWoodSurcharge is null && missingSurcharge.Status == "partial",
+            "a missing i6 global stays unknown instead of becoming a free distortion");
+        f = new(); f.Write(f.Nodes["Nt"] + 0x1C, 4); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().TransformationCount == 2, "Nt type failure is isolated");
+        f = new(); var ntReads = 0; var ntChanged = f.Capture((address, count) => { var bytes = f.Read(address, count); if (address == f.Data["Nt"] && ++ntReads == 1) f.Write(address, 1); return bytes; });
+        Check(ntChanged.NikaEnhancement.Status == "unknown" && ntChanged.Status == "confirmed", "changing Nt does not become a confirmed enhancement");
+        f = new(); f.Write(MemoryFixture.Base + 0x8D17B0, 0); Check(f.Capture().NikaEnhancement.Status == "unknown" && f.Capture().Status == "confirmed", "Nt native layout mismatch is isolated");
         f = new();
-        f.Write(f.Nodes["X3"] + 0x18, 0); Check(f.Capture().Round is null, "a nonzero scalar cannot retain the constructor's empty value tag");
-        f.Write(f.Nodes["X3"] + 0x20, 0); Check(f.Capture().Round == 0, "constructor zero is distinct from an unknown round");
-        f = new(); f.Write(f.Nodes["X3"] + 0x18, 5); Check(f.Capture().Round is null, "an integer round cannot take a real current-value type");
+        f.Write(f.Nodes["Y3"] + 0x18, 0); Check(f.Capture().Round is null, "a nonzero scalar cannot retain the constructor's empty value tag");
+        f.Write(f.Nodes["Y3"] + 0x20, 0); Check(f.Capture().Round == 0, "constructor zero is distinct from an unknown round");
+        f = new(); f.Write(f.Nodes["Y3"] + 0x18, 5); Check(f.Capture().Round is null, "an integer round cannot take a real current-value type");
         f = new();
         f.Write(MemoryFixture.ValueObject + 0x18, 8);
         var partial = f.Capture(); Check(partial.Status == "partial" && partial.SkillPoints is null && partial.TransformationCount == 2, "bad skill handle generation is isolated");
-        f = new(); f.Write(f.Nodes["hW"] + 0x1C, 4); partial = f.Capture();
+        f = new(); f.Write(f.Nodes["i6"] + 0x1C, 4); partial = f.Capture();
         Check(partial.DistortionWoodSurcharge is null && partial.TransformationCount == 2 && partial.SkillPoints == 7, "wrong global type does not zero or discard independent facts");
         f = new(); var reads = 0;
-        partial = f.Capture((address, count) => { var bytes = f.Read(address, count); if (address == f.Data["hW"] && ++reads == 1) f.Write(address, 5); return bytes; });
+        partial = f.Capture((address, count) => { var bytes = f.Read(address, count); if (address == f.Data["i6"] && ++reads == 1) f.Write(address, 5); return bytes; });
         Check(partial.DistortionWoodSurcharge is null && partial.TransformationCount == 2, "changing surcharge is unknown");
-        f = new(); f.Write(f.Data["hW"], uint.MaxValue); partial = f.Capture();
+        f = new(); f.Write(f.Data["i6"], uint.MaxValue); partial = f.Capture();
         Check(partial.DistortionWoodSurcharge is null && partial.TransformationCount == 2, "negative surcharge does not become zero");
-        f = new(); f.Write(f.Nodes["X3"] + 0x20, 66); partial = f.Capture();
+        f = new(); f.Write(f.Nodes["Y3"] + 0x20, 66); partial = f.Capture();
         Check(partial.Round is null && partial.DistortionWoodSurcharge == 0, "invalid round does not invalidate independent costs");
-        f = new(); f.Write(f.Data["LW"], 0); partial = f.Capture();
+        f = new(); f.Write(f.Data["Lm"], 0); partial = f.Capture();
         Check(partial.DistortionWoodIncrement is null && partial.DistortionWoodSurcharge is null, "uninitialized increment is not a free distortion");
-        f = new(); f.Write(f.Data["LO"], 0); f.Write(MemoryFixture.ValueObject + 0x78, 0); partial = f.Capture();
+        f = new(); f.Write(f.Data["Le"], 0); f.Write(MemoryFixture.ValueObject + 0x78, 0); partial = f.Capture();
         Check(partial.TransformationCount == 0 && partial.SkillPoints == 0, "confirmed zero consumables remain zero");
         f = new(); f.Write(MemoryFixture.ValueObject + 0x78, uint.MaxValue); partial = f.Capture();
         Check(partial.SkillPoints is null && partial.DistortionWoodSurcharge == 0, "negative skill points do not corrupt wood facts");
@@ -48,6 +69,8 @@ static class GameSpecialRecipeConditionsTests
         Check(GameSpecialRecipeConditions.CaptureForTests(Forbidden, () => f.Roots, f.Roots, MemoryFixture.Base, "other", GameProgression.SupportedMapHash).Status == "unknown", "unsupported version does not read");
         Check(GameSpecialRecipeConditions.CaptureForTests(Forbidden, () => f.Roots, f.Roots, MemoryFixture.Base, GameProgression.SupportedVersion, "wrong").Status == "unknown", "unsupported map does not read");
         var state = Conditions(Special(0, 2, 8, 40));
+        Check(CraftConditions.TryProject(Conditions(lazySurcharge), [new("IFCT", "IFCT", 3)], out _, out var firstDistortionWood, out _, out _) && firstDistortionWood == 3,
+            "a fresh distortion craft uses the verified base cost before surcharge begins");
         Check(CraftConditions.TryProject(state, [new("IFCT", "IFCT", 3), new("IFCT", "IFCT", 3)], out var next, out var wood, out _, out _) && wood == 11 && next?.Special?.DistortionWoodSurcharge == 10,
             "two distortion costs are3+8 and jointly advance surcharge");
         Check(!CraftConditions.Available(state, [new("CHCT", "CHCT", 2), new("CHCT", "CHCT", 1)], out _, out _), "shared transformation stock cannot be spent twice");
@@ -101,13 +124,18 @@ static class GameSpecialRecipeConditionsTests
                 object Recipe(string id,string target,string material)=>new{id,resultUnitRawcode=target,resultCount=1,hotkey=(string?)null,casterUnitRawcodes=new[]{material},
                     ingredients=new[]{new{type="UNIT",rawcode=material,count=1},new{type,rawcode=type,count=amount}}};
                 File.WriteAllText(catalog,JsonSerializer.Serialize(new{map=new{sha256=GameProgression.SupportedMapHash},units=new[]{"b001","m001","g001"}.Select(rawcode=>new{rawcode,playable=true}),recipes=new[]{Recipe("r001","m001","b001"),Recipe("r002","g001","m001")}}));
-                File.WriteAllText(aliases,JsonSerializer.Serialize(new{recipes=new[]{"r001","r002"}.Select(recipeId=>new{recipeId,command="검사조합"})}));
+                File.WriteAllText(aliases,JsonSerializer.Serialize(new{mapSha256=GameProgression.SupportedMapHash,recipes=new[]{"r001","r002"}.Select(recipeId=>new{recipeId,command="검사조합"})}));
                 async Task<JsonElement> Run(ServiceFixture f)=>await new GameCraftService(f.Snapshot,catalog,aliases,f.Execute).RunFixtureAsync("r002",1,CancellationToken.None,app,adaptive:true);
                 var normal=new ServiceFixture(type);var result=await Run(normal);
                 if(result.GetProperty("status").GetString()!="succeeded"||normal.Calls!=2)throw new InvalidOperationException("Special normal service "+type+" "+result);
                 passed++;
                 var shortage=new ServiceFixture(type);if(type=="IFCT")shortage.Wood=10;else if(type=="CHCT")shortage.Changes=1;else if(type=="SKPT")shortage.Skills=7;else shortage.Round=41;
                 result=await Run(shortage);if(result.GetProperty("status").GetString()!="failed"||shortage.Calls!=0)throw new InvalidOperationException("Special shortage must not consume "+type);passed++;
+                if(type=="IFCT")
+                {
+                    var unknownWood=new ServiceFixture(type){ResourcesStatus="unknown"};result=await Run(unknownWood);
+                    if(result.GetProperty("status").GetString()!="failed"||unknownWood.Calls!=0)throw new InvalidOperationException("Unknown real wood must still block distortion input");passed++;
+                }
                 if(type=="RMAX")
                 {
                     var transition=new ServiceFixture(type){PassRoundAfterFirst=true};result=await Run(transition);
@@ -120,10 +148,10 @@ static class GameSpecialRecipeConditionsTests
     }
     private sealed class ServiceFixture(string type)
     {
-        internal Dictionary<string,int> Units=new(){{"b001",1}};internal int Calls,Wood=11,Changes=2,Skills=8,Round=40,Surcharge;internal bool PassRoundAfterFirst;private long sequence;
+        internal Dictionary<string,int> Units=new(){{"b001",1}};internal int Calls,Wood=11,Changes=2,Skills=8,Round=40,Surcharge;internal string? ResourcesStatus="confirmed";internal bool PassRoundAfterFirst;private long sequence;
         internal string Snapshot()=>JsonSerializer.Serialize(new{status="snapshot_read",timestamp=DateTimeOffset.UtcNow,processId=1234,sequence=++sequence,gameVersion="1.28.5.7680",localPlayer=0,
             sessionIdentity="00010000:00020000:00030000",loadedMap=Path.GetFullPath("fixture.w3x"),loadedMapHash=GameProgression.SupportedMapHash,catalogMatchesLoadedArchive=true,stableRoots=true,stableUnits=true,readErrors=0,
-            counts=Units.Where(x=>x.Value>0).Select(x=>new{rawcode=x.Key,count=x.Value,isCharacter=true}),resources=new{status="confirmed",localPlayer=0,wood=Wood,gold=1000},
+            counts=Units.Where(x=>x.Value>0).Select(x=>new{rawcode=x.Key,count=x.Value,isCharacter=true}),resources=new{status=ResourcesStatus,localPlayer=0,wood=Wood,gold=1000},
             recipeConditions=new{status="unknown",special=Special(Surcharge,Changes,Skills,Round)}});
         internal Task<string?> Execute(PlannedCraftStep step,JsonElement baseline,CancellationToken cancel)
         {
@@ -137,13 +165,13 @@ static class GameSpecialRecipeConditionsTests
         internal const uint Base=0x60000000,Player=0x26000000,ValueObject=0x37000000;
         internal Roots Roots=new(0x31000000,0x32000000,0x33000000,0x34000000,1,0);
         internal Dictionary<uint,byte> Bytes=new();internal Dictionary<string,uint> Nodes=new(),Data=new();private uint nextNode=0x30000000,nextArray=0x27000000;
-        internal MemoryFixture()
+        internal MemoryFixture(string nikaGlobal = "Nt")
         {
             foreach(var(rva,bytes)in GameProgression.NativeSignatures(Base).Concat(GameResources.SkillPointSignatures(Base)).Concat(GameStartingEvolution.NativeSignatures().Where(signature => signature.Rva is 0x8D17B0 or 0x8CB9D0)))Put(Base+rva,bytes);
             Write(Base+0xD0DEF8,0x20000000);Write(0x20000014,0x21000000);Write(0x21000090,0x22000000);Write(0x22000004,0x23000000);Write(0x2300285C,0x24000000);
             Write(0x2400001C,0x25000000);Write(0x24000024,63);Fill(0x25000000,64*12);for(uint i=0;i<64;i++)Write(0x25000000+i*12,4);
             Write(Roots.Players+0x58,Player);Put(Player+0x30,[0]);
-            Add("hW",0);Add("LW",5);Add("LO",2);Add("X3",40);Add("NG",0);
+            Add("i6",0);Add("Lm",5);Add("Le",2);Add("Y3",40);Add(nikaGlobal,0);
             Write(Base+0xD30448,0x35000000);Write(0x3500001C,2);Write(0x3500000C,0x36000000);Write(0x36000008,0xFFFFFFFE);Write(0x3600000C,ValueObject);
             Write(Player+0x98,1);Write(Player+0x9C,7);Write(ValueObject+0x18,7);Write(ValueObject+0x78,7);
         }
@@ -151,7 +179,7 @@ static class GameSpecialRecipeConditionsTests
         {
             var node=nextNode;nextNode+=0x100;var key=node+0x50;Fill(node,0x24);Put(key,Encoding.ASCII.GetBytes(name+"\0"));var hash=GameProgression.NameHash(name);var bucket=0x25000000+(hash&63)*12;
             Write(node,hash);Write(node+8,BitConverter.ToUInt32(Read(bucket+8,4)));Write(node+0x14,key);Write(bucket+8,node);Nodes[name]=node;
-            if(name=="X3"){Write(node+0x18,4);Write(node+0x1C,4);Write(node+0x20,value);}else{var header=nextArray;nextArray+=0x1000;Write(node+0x18,9);Write(node+0x1C,9);Write(node+0x20,header);Write(header+8,4);Write(header+12,header+0x100);Write(header+0x100,value);Data[name]=header+0x100;}
+            if(name=="Y3"){Write(node+0x18,4);Write(node+0x1C,4);Write(node+0x20,value);}else{var header=nextArray;nextArray+=0x1000;Write(node+0x18,9);Write(node+0x1C,9);Write(node+0x20,header);Write(header+8,4);Write(header+12,header+0x100);Write(header+0x100,value);Data[name]=header+0x100;}
         }
         internal GameSpecialRecipeConditions.State Capture(Func<uint,int,byte[]>? read=null,Func<Roots?>? readRoots=null)=>GameSpecialRecipeConditions.CaptureForTests(read??Read,readRoots??(()=>Roots),Roots,Base,GameProgression.SupportedVersion,GameProgression.SupportedMapHash);
         internal void Write(uint p,uint value)=>Put(p,BitConverter.GetBytes(value));

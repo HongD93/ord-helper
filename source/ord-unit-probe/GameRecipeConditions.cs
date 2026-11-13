@@ -1,14 +1,14 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 
-// 2.323[C] UBAN/KING의 지속 전시·항법 표식을 읽는다. JASS 변수나 게임 메모리를 쓰지 않는다.
+// 2.331[C] UBAN/KING의 지속 전시·항법 표식을 읽는다. JASS 변수나 게임 메모리를 쓰지 않는다.
 static class GameRecipeConditions
 {
-    internal const string MapHash = "0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c";
+    internal const string MapHash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
     internal const string Version = "1.28.5.7680";
     private static readonly HashSet<string> Wanted = new(StringComparer.Ordinal)
         { "A908", "A0II", "A905", "A906", "A907", "A909" };
-    // 같은 SHA의 CHi 조합 등록 중 UBAN 대상 60종. P7의 무관 전시·스토리 개체 능력은 읽지 않는다.
+    // 2.331[C]의 UBAN 조합 등록 대상 60종. P7의 무관 전시·스토리 개체 능력은 읽지 않는다.
     private static readonly HashSet<string> BanTargets = new(StringComparer.Ordinal)
     {
         "h040", "h049", "h04A", "h04B", "h04C", "h04D", "h04E", "h04F", "h04G", "h04J", "h04Q", "h058",
@@ -119,7 +119,7 @@ static class GameRecipeConditions
                             var identity = UnitIdentity(unit.Address, data);
                             if (identity.Owner != current.LocalPlayer || identity.Rawcode != unit.Rawcode) throw new IOException("Owned top marker changed.");
                             var abilities = ReadAbilities(identity);
-                            // 이 네 표식은 Bhl의 OR 절과 직접 일치한다. A07O+Hero 경로는 판별 근거가 없어 추정하지 않는다.
+                            // 이 네 표식은 Bmc의 OR 절과 일치한다. A07O와 Hero를 함께 요구하는 분기는 Sc를 직접 읽지 않아 미확인이다.
                             if (new[] { "A905", "A906", "A907", "A909" }.Any(code => abilities.GetValueOrDefault(code) > 0)) top.Add(identity);
                         }
                         catch (Exception error) when (error is IOException or Win32Exception or OverflowException) { abilityErrors++; }
@@ -225,5 +225,5 @@ static class GameRecipeConditions
     private static uint CheckedPointer(uint value) => Pointer(value) ? value : throw new IOException("Invalid condition pointer.");
     private static Evidence EvidenceFor(string reason, int samples, int worldErrors, int abilityErrors, int displays, int navigation, int top) =>
         new(true, "read_only_1285_persistent_unit_markers", reason, MapHash, samples, worldErrors + abilityErrors, worldErrors, abilityErrors,
-            displays, navigation, top, [3140, 3148, 48100, 48125, 50259, 50320, 52528, 52571, 58063, 58066, 11009, 11015], false);
+            displays, navigation, top, [3321, 3329, 49958, 49983, 52103, 52164, 54370, 54376, 59910, 59914, 12684, 12690], false);
 }

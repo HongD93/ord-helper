@@ -21,9 +21,9 @@ internal sealed record PortableLayout(string Root, string Server, string Catalog
         if (!value.TryGetProperty("formatVersion", out var version) || !version.TryGetInt32(out var number) || number != 1)
             throw new PortableStartupException("도우미 실행 설정을 읽지 못했습니다. 프로그램 폴더를 확인해 주세요.");
         ValidateRelative(value, "serverRelativePath", "app/server/OrdUnitProbe.exe");
-        ValidateRelative(value, "catalogRelativePath", "data/unit_catalog_2.323C.json");
+        ValidateRelative(value, "catalogRelativePath", "data/unit_catalog_2.331C.json");
         return new(root, Path.Combine(root, "app", "server", "OrdUnitProbe.exe"),
-            Path.Combine(root, "data", "unit_catalog_2.323C.json"), Path.Combine(root, "logs"));
+            Path.Combine(root, "data", "unit_catalog_2.331C.json"), Path.Combine(root, "logs"));
     }
 
     private static void ValidateRelative(JsonElement manifest, string name, string expected)

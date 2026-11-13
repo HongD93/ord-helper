@@ -151,7 +151,15 @@
       return {proven:false,searchLimited:limited,nodeCount:nodes};
     }
     const effects=code=>native(code)?(profiles[code].effects||[]).filter(e=>CombatVerifier.isRuntimeReferenceEligible(e)&&e.evidence&&["tooltip","script","objectData"].includes(e.evidence.type)):[];
-    const role=code=>native(code)?profiles[code]?.damage?.reviewedAnchorRole||null:null;
+    const traitAnchorCache=new Map(),traitAnchor=code=>{if(!traitAnchorCache.has(code))traitAnchorCache.set(code,Records?.reviewedTraitAnchor?.(catalog,combat,code)||null);return traitAnchorCache.get(code);};
+    const role=code=>native(code)?profiles[code]?.damage?.reviewedAnchorRole||traitAnchor(code)?.role||null:null;
+    function reviewedPurpose(code,kind){
+      if(strategyUnits[code]?.[kind])return strategyUnits[code][kind];
+      const anchor=traitAnchor(code),source=anchor&&strategyUnits[anchor.sourceRawcode]?.[kind];
+      return source?{assessment:source.assessment,conditions:source.conditions||[],evidence:[...(source.evidence||[]),anchor.review.sourceReview],
+        traitRoleReference:true,sourceRawcode:anchor.sourceRawcode,numericInheritance:false}:null;
+    }
+    for(const entry of catalog.progressTransformations?.entries||[]){const anchor=traitAnchor(entry.resultRawcode);if(anchor){if(!unitDependencies.has(entry.resultRawcode))unitDependencies.set(entry.resultRawcode,new Set());unitDependencies.get(entry.resultRawcode).add(anchor.sourceRawcode);}}
     const coreMode=code=>({physicalDps:"physical",magicDps:"magic",hybridDps:"hybrid"})[role(code)]||null;
     const skillMana=code=>strategyUnits[code]?.manaDependence||{};
     const nativeMana=code=>options.combatValidation?.unitModels?.map?.sha256===hash?options.combatValidation.unitModels.units?.[code]?.mana:null;
@@ -238,6 +246,22 @@
       }
       const result={goals:Array.from(goals.values()),slots,coreCodes:coreCodes.filter(code=>goals.has(code)),retained,replacements,formPresence,fixedGoals,prunedIntermediateLegends,prunedIntermediateHiddenSeeds};resolved.set(template.id,result);return result;
     }
+    function combatRosterWithOwnedRandom(roster,inventory,plan){
+      const goals=new Map(roster.goals.map(goal=>[goal.rawcode,{...goal}])),added=[],consumed=[];
+      const projected=plan?.executable===true&&plan.projectedCounts?countsOf(plan.projectedCounts):null;
+      for(const [rawcode,owned]of inventory){
+        if(owned<1||units.get(rawcode)?.tier!=="랜덤전용"||!native(rawcode))continue;
+        const available=projected?Math.min(owned,projected.get(rawcode)||0):roster.goals.some(goal=>ancestry(goal.rawcode,rawcode))?0:owned;
+        if(available<owned)consumed.push({...info(rawcode),count:owned-available});
+        const existing=goals.get(rawcode)?.count||0;
+        if(available>existing){
+          goals.set(rawcode,{...info(rawcode),count:available,kind:"owned_random",slots:[]});
+          added.push({...info(rawcode),count:available-existing});
+        }
+      }
+      return {...roster,goals:Array.from(goals.values()),ownedRandomSupport:{added,consumedOrReserved:consumed,
+        policy:"owned_unconsumed_random_units_only",futureRandomAcquisitionAssumed:false,doubleCounted:false}};
+    }
     function firstInvestmentTargets(roster){
       if(!firstInvestmentRawcode||upperAnchors.size)return [];
       const finalTiers=new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]);
@@ -276,7 +300,7 @@
       for(const goal of goals){
         if(!native(goal.rawcode))continue;
         if(["lineDamage","bossDamage","storyDamage"].includes(roleName)){
-          const purpose=strategyUnits[goal.rawcode]?.[roleName];
+          const purpose=reviewedPurpose(goal.rawcode,roleName);
           if(purpose&&["main","support","finisher"].includes(purpose.assessment)&&(purpose.evidence||[]).length)sources.push({...info(goal.rawcode),count:goal.count,assessment:purpose.assessment,conditions:purpose.conditions||[],evidence:purpose.evidence});
         }else if(roleName==="reviewedDamageCore"){
           if(role(goal.rawcode)&&(!dpsCodes||dpsCodes.includes(goal.rawcode)))sources.push({...info(goal.rawcode),count:goal.count,role:role(goal.rawcode),conditions:[],evidence:profiles[goal.rawcode]?.damage?.anchorReview||null});
@@ -818,7 +842,7 @@
     }
     function evaluate(template,inventory,settings){
       const roster=resolve(template,inventory,settings),held=protectedFor(roster,inventory,settings);
-      const primary=roster.coreCodes.find(code=>(inventory.get(code)||0)<(roster.goals.find(g=>g.rawcode===code)?.count||1)&&strategyUnits[code]?.lineDamage?.assessment==="main")||null;
+      const primary=roster.coreCodes.find(code=>(inventory.get(code)||0)<(roster.goals.find(g=>g.rawcode===code)?.count||1)&&reviewedPurpose(code,"lineDamage")?.assessment==="main")||null;
       const story=roster.goals.find(goal=>strategyUnits[goal.rawcode]?.storyDamage?.assessment==="main"&&goal.kind!=="core")?.rawcode;
       const priority=goal=>goal.kind==="retained"?0:goal.rawcode===story?1:goal.rawcode===primary?2:goal.kind==="core"?6:supports(goal.rawcode,"areaStun").length||supports(goal.rawcode,"alwaysSlow").length?3:supports(goal.rawcode,"manaSupport").length?4:5;
       const stageOrder=roster.goals.slice().sort((a,b)=>priority(a)-priority(b)||a.rawcode.localeCompare(b.rawcode));
@@ -885,8 +909,11 @@
       const modeEntryBlocked=settings.kingPathEntryCompatibility?.status==="blocked";
       if(modeEntryBlocked){feasibility={...feasibility,status:"blocked",grade:"C",reasons:unique([...feasibility.reasons,"king_path_entry_unavailable"])};action=null;}
       if(!acquisition.sharedChoiceFeasible)action=null;
-      const considered=assessment(template,roster,settings),missingGoals=roster.goals.filter(g=>(inventory.get(g.rawcode)||0)<g.count).map(g=>({...info(g.rawcode),count:g.count-(inventory.get(g.rawcode)||0)}));
-      const combatValidation=combatVerifier?combatVerifier.assess(roster.goals,{...settings,coreRawcodes:roster.coreCodes},considered):null;
+      if(template.sourceEvidence?.supportComparison?.randomReplacementRequirements?.coverageComplete===false&&feasibility.status!=="blocked")
+        feasibility={...feasibility,status:"conditional",grade:"B",reasons:unique([...feasibility.reasons,"random_effect_reference_incomplete"])};
+      const combatRoster=combatRosterWithOwnedRandom(roster,inventory,forecast.executable?forecast:actual);
+      const considered=assessment(template,combatRoster,settings),missingGoals=roster.goals.filter(g=>(inventory.get(g.rawcode)||0)<g.count).map(g=>({...info(g.rawcode),count:g.count-(inventory.get(g.rawcode)||0)}));
+      const combatValidation=combatVerifier?combatVerifier.assess(combatRoster.goals,{...settings,coreRawcodes:roster.coreCodes},considered):null;
       if(considered.compositionStatus==="incomplete")action=null;
       const operatingConditions=unique([...(template.conditions||[]),roster.goals.some(g=>supports(g.rawcode,"manaSupport").length)?"마나 지원 유닛의 범위 안에 마나를 쓰는 주력 배치":null,
         roster.goals.some(g=>supports(g.rawcode,"teamAttackSpeed").length)?"팀 공속 보조의 오라 범위 안에 주력 배치":null,
@@ -900,9 +927,9 @@
       const sourceCounts=new Map(roster.fixedGoals.map(goal=>[goal.rawcode,goal.count])),retainedExtras=recordOnly?roster.retained.filter(goal=>goal.count>(sourceCounts.get(goal.rawcode)||0)).map(goal=>({rawcode:goal.rawcode,count:goal.count-(sourceCounts.get(goal.rawcode)||0)})):[],retainedOutsideRecord=retainedExtras.map(goal=>goal.rawcode);
       return {id:template.id,name:template.name||template.title||template.id,mode:template.direction,goals:roster.goals.map(g=>({...g,owned:inventory.get(g.rawcode)||0,needed:Math.max(0,g.count-(inventory.get(g.rawcode)||0)),progress:goalProgress(g,inventory,settings)})),
         noTranscendentUnits:template.noTranscendentUnits===true,transcendencePlan:template.transcendencePlan||null,
-        coreRawcodes:roster.coreCodes,slots:roster.slots,retained:roster.retained,replacements:roster.replacements,requirements:considered.coverage,assessment:considered,combatValidation,operatingConditions,acquisitionPlan:acquisition,recommendationFeasibility:feasibility,budgetFeasibility,
+        coreRawcodes:roster.coreCodes,slots:roster.slots,retained:roster.retained,replacements:roster.replacements,requirements:considered.coverage,assessment:considered,combatValidation,ownedRandomSupport:combatRoster.ownedRandomSupport,operatingConditions,acquisitionPlan:acquisition,recommendationFeasibility:feasibility,budgetFeasibility,
         recommendationPriority:{kingPathDependent:kingPathDependent(roster,template),requiredKingPathRawcodes:kingPathDependent(roster,template)?["h0C8"]:[]},kingPathConstraint:{mode:settings.kingPathMode,maximumNewKingCrafts:modeLimit,observedHistoricalTopLowerBound:observedKingTopLowerBound,historicalCountVerified:false,selectedForecastNewKingCrafts:forecast.executable?countKingSteps(forecast):null,status:modePathBlocked||modeEntryBlocked?"blocked":modeLimit===null?"not_selected":"within_planning_limit",entryCompatibility:settings.kingPathEntryCompatibility,nativeKingGate:settings.recipeConditions?.king?.status||"unknown",planningLimitDoesNotGrantNativePermission:true},
-        source:template.source||null,sourceEvidence:{...(template.sourceEvidence||{kind:"native_fallback",recordIds:[],urls:[],clearVerified:false}),projection,currentOwnedUpperProjection:{addedRawcodes:ownedUpperInvestment.anchors.filter(unit=>!unit.sourceGoal).map(unit=>unit.rawcode),clearOutcomeTransferred:false},...(recordOnly?{recommendationPolicy,compositionChanged:template.sourceEvidence?.compositionChanged===true||retainedOutsideRecord.length>0,clearOutcomeTransferred:false,currentOwnedProjection:{addedRawcodes:retainedOutsideRecord,additionalUnits:retainedExtras,clearOutcomeTransferred:false}}:{})},projection,prunedIntermediateLegends:roster.prunedIntermediateLegends,ownedUpperInvestment,
+        source:template.source||null,sourceEvidence:{...(template.sourceEvidence||{kind:"native_fallback",recordIds:[],urls:[],clearVerified:false}),projection,currentOwnedUpperProjection:{addedRawcodes:ownedUpperInvestment.anchors.filter(unit=>!unit.sourceGoal).map(unit=>unit.rawcode),clearOutcomeTransferred:false},...(recordOnly?{recommendationPolicy,compositionChanged:template.sourceEvidence?.compositionChanged===true||retainedOutsideRecord.length>0||combatRoster.ownedRandomSupport.added.length>0,clearOutcomeTransferred:false,currentOwnedProjection:{addedRawcodes:retainedOutsideRecord,additionalUnits:retainedExtras,additionalRandomUnits:combatRoster.ownedRandomSupport.added,clearOutcomeTransferred:false}}:{})},projection,prunedIntermediateLegends:roster.prunedIntermediateLegends,ownedUpperInvestment,
         matchesFirstInvestmentLineage:legendTargets.length>0,firstInvestment:investment,matchesFirstLegendAncestor:investment?.tier==="전설"&&legendTargets.length>0,firstLegendInvestment:investment?.tier==="전설"?investment:null,
         goalSource:template.evidenceScope||"native_composition_not_verified_clear",targetRosterStatus:template.recordPresenceGoals?"registered_presence_minimum":roster.slots.every(s=>s.rawcode)?"complete_native_composition":"incomplete",
         planning:{current:{conditionRequirements:actual.conditionRequirements||[],missingConditions:actual.missingConditions||[],blockedConditions:actual.blockedConditions||[],unknownConditions:actual.unknownConditions||[],conditionsReady:actual.conditionsReady,itemRequirements:actual.itemRequirements||[],missingItems:actual.missingItems||[],itemsReady:actual.itemsReady,unitReady:actual.executable,resourcesReady:actualCost?resources(actualCost,settings):null,choiceWisps:actual.executable?actual.choiceWispCount:null,wood:actualCost?.wood??null,gold:actualCost?.gold??null,steps:actual.executable?actual.stepCount:null,conditions:actualCost?.conditions||[],reason:actual.reason},
@@ -1097,8 +1124,10 @@
         const supplement=kingRecordProvider.templates(inventory,{...sourceSelection,preferredDeckId:null}),seen=new Set((recordSet?.templates||[]).map(template=>template.id)),extra=supplement.templates.filter(template=>!seen.has(template.id));
         if(extra.length)recordSet={...recordSet,templates:[...(recordSet?.templates||[]),...extra],preselection:{...recordSet?.preselection,kingPathSupplementCount:extra.length,kingPathSupplementTruncated:supplement.preselection?.truncated===true}};
       }
-      const usingRecords=Boolean(recordSet?.templates.some(t=>(settings.direction==null||settings.direction==="all"||settings.direction===t.direction)&&(includeKingPathDecks||!kingPathDependent(resolve(t,inventory,settings),t))));
+      const usingRecords=Boolean([...(recordSet?.templates||[]),...(recordSet?.missingRandomTemplates||[])].some(t=>(settings.direction==null||settings.direction==="all"||settings.direction===t.direction)&&(includeKingPathDecks||!kingPathDependent(resolve(t,inventory,settings),t))));
       let templates=recordOnly?(recordSet?.templates||[]).filter(template=>Records?.originalClearTemplate?.(template)===true):usingRecords?[...recordSet.templates,...(recordSet.alternatives||[])]:fallbackTemplates;
+      const missingRandomBases=(recordSet?.missingRandomTemplates||[]).filter(template=>Records?.originalClearTemplate?.(template)===true&&
+        (includeKingPathDecks||!kingPathDependent(resolve(template,inventory,settings),template))&&(includeMysteriousDecks||!mysteriousDependent(template)));
       if(!includeKingPathDecks)templates=templates.filter(template=>!kingPathDependent(resolve(template,inventory,settings),template));
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
       const completeFallbackIds=new Set();
@@ -1131,7 +1160,7 @@
         templates=[...templates,...variants];
       }
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
-      if(!nativeMap||counts==null||!templates.length||typeof graph.planDeck!=="function"){
+      if(!nativeMap||counts==null||!templates.length&&!(supportAdapter&&missingRandomBases.length)||typeof graph.planDeck!=="function"){
         const reinforcements=nativeMap&&counts!=null&&typeof graph.planDeck==="function"?reinforcementAdvisor?.recommend(inventory,{...settings,rewardBudget:activeRewardBudget},{}):null;
         return {schemaVersion:1,recommendationPolicy,targetDeck:null,craftTargets:[],order:[],selectedDeckId:null,alternatives:[],...(reinforcements?{reinforcements}:{}),warnings:[...warnings,"전체 목표 구성 자료를 확인하지 못했습니다."],canConfirmClear:false,searchComplete:false,evaluatedDeckCount:0,eligibleDeckCount:0};
       }
@@ -1170,15 +1199,17 @@
           ownedTemplates.push(variant);opportunity.templateIds.push(id);
         }
       }
-      const adaptationBases=new Map(templates.map(template=>[template.id,template]));
+      const adaptationOriginals=unique([...templates,...missingRandomBases]);
+      const adaptationBases=new Map(adaptationOriginals.map(template=>[template.id,template]));
       const handPreselectionCache=new Map(),handPreselection=template=>{if(!handFitAdvisor)return null;if(!handPreselectionCache.has(template.id)){const roster=resolve(template,inventory,settings);handPreselectionCache.set(template.id,handFitAdvisor.preselectionScore({...template,goals:roster.fixedGoals||roster.goals},inventory,settings));}const score=handPreselectionCache.get(template.id);return finite(score)&&score>=0?score:null;};
-      const supportSearch={enabled:Boolean(supportAdapter),bounded:Boolean(supportAdapter),evaluatedBases:0,generated:0,truncated:false};
+      const supportSearch={enabled:Boolean(supportAdapter),bounded:Boolean(supportAdapter),evaluatedBases:0,generated:0,truncated:false,
+        missingRandomBases:missingRandomBases.length,unfilledRandomSupport:[],randomSupportSuggestions:[]};
       let adaptedTemplates=[];
       if(supportAdapter&&!craftRunning){
         const supportFit=template=>{const roster=resolve(template,inventory,settings);return {upper:upperInvestment(roster).sourceGoalMatches,first:firstInvestmentTargets(roster).length,owned:roster.fixedGoals.filter(goal=>(inventory.get(goal.rawcode)||0)>=goal.count).length};};
-        const fits=new Map(templates.map(template=>[template.id,supportFit(template)]));
+        const fits=new Map(adaptationOriginals.map(template=>[template.id,supportFit(template)]));
         const supportPrefix=(a,b)=>fits.get(b.id).upper-fits.get(a.id).upper||Number(fits.get(b.id).first>0)-Number(fits.get(a.id).first>0);
-        let originals=templates.slice().sort((a,b)=>supportPrefix(a,b)||fits.get(b.id).owned-fits.get(a.id).owned||a.id.localeCompare(b.id));
+        let originals=adaptationOriginals.slice().sort((a,b)=>supportPrefix(a,b)||fits.get(b.id).owned-fits.get(a.id).owned||a.id.localeCompare(b.id));
         if(handFitAdvisor)originals=rerankKnown(originals,supportPrefix,handPreselection,(a,b)=>b-a);
         const preferredBase=requestedBase||lastSelectedTemplate?.sourceEvidence?.baseTemplateId||settings.preferredDeckId;
         const bases=unique([adaptationBases.get(preferredBase),...originals].filter(Boolean)).slice(0,12);
@@ -1191,6 +1222,8 @@
             if(adaptedTemplates.length>=24){supportSearch.truncated=true;break;}
             const adapted=supportAdapter.adapt(base,inventory,{...settings,supportMaxVariants:Math.min(4,24-adaptedTemplates.length)});
             supportSearch.evaluatedBases++;supportSearch.truncated||=adapted.search?.limitReached===true||adapted.search?.bounded===true;
+            if(adapted.randomSupportNeeds?.length)supportSearch.unfilledRandomSupport.push({baseTemplateId:base.id,requirements:adapted.randomSupportNeeds});
+            if(adapted.randomSupportSuggestions?.length)supportSearch.randomSupportSuggestions.push({baseTemplateId:base.id,suggestions:adapted.randomSupportSuggestions});
             adaptedTemplates.push(...(adapted.templates||[]).filter(template=>Records.originalClearTemplate(base)&&supportAdapter.isAdaptation(template,base)).slice(0,24-adaptedTemplates.length));
           }
           supportSearch.generated=adaptedTemplates.length;supportSearch.truncated||=originals.length>bases.length;

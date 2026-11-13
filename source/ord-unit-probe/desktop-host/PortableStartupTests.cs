@@ -19,7 +19,7 @@ internal static class PortableStartupTests
         var fixture = Path.Combine(Path.GetDirectoryName(output)!, "portable-test-fixture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(fixture);
         var server = Path.Combine(fixture, "app", "server", "OrdUnitProbe.exe");
-        var catalog = Path.Combine(fixture, "data", "unit_catalog_2.323C.json");
+        var catalog = Path.Combine(fixture, "data", "unit_catalog_2.331C.json");
         Directory.CreateDirectory(Path.GetDirectoryName(server)!); Directory.CreateDirectory(Path.GetDirectoryName(catalog)!);
         Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(server)!, "wwwroot"));
         File.WriteAllText(server, "fixture"); File.WriteAllText(catalog, "{}");
@@ -29,7 +29,7 @@ internal static class PortableStartupTests
         Test("manifest 없는 개발 위치는 포터블 모드로 오인하지 않음", () => Require(PortableLayout.Find(fixture) is null));
         Test("포터블 경로는 실행 파일 폴더 기준", () =>
         {
-            File.WriteAllText(manifest, "{\"formatVersion\":1,\"serverRelativePath\":\"app/server/OrdUnitProbe.exe\",\"catalogRelativePath\":\"data/unit_catalog_2.323C.json\"}");
+            File.WriteAllText(manifest, "{\"formatVersion\":1,\"serverRelativePath\":\"app/server/OrdUnitProbe.exe\",\"catalogRelativePath\":\"data/unit_catalog_2.331C.json\"}");
             var found = PortableLayout.Find(fixture)!; Require(found.Server == server && found.Catalog == catalog && found.Logs == layout.Logs);
             Require(found.Arguments.Contains(catalog) && found.Arguments.Contains(Path.Combine(layout.Logs, "live-counter.json")));
         });
