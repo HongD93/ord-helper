@@ -62,6 +62,8 @@
     if(clearRecords&&!Array.isArray(clearRecords.records)&&clearRecords.recipeGraph){options=clearRecords;clearRecords=null;}
     combat=combat||{};rules=rules||{};options=options||{};
     const recordOnly=options.recordOnly===true;
+    const historicalRosterOnly=recordOnly&&Records?.historicalProjection(clearRecords,catalog)===true;
+    const targetMapVersion=String(catalog.map?.version||"").match(/^\d+\.\d{3}/)?.[0]||"2.323";
     const minRecordVersion=recordOnly?"2.321":options.minRecordVersion||null;
     const units=new Map((catalog.units||[]).map(u=>[u.rawcode,u])),mysterious=code=>units.get(code)?.tier==="신비";
     let includeMysteriousDecks=false;
@@ -438,7 +440,7 @@
       const missingSlots=roster.slots.filter(s=>!s.rawcode).map(s=>s.id);
       const mana=manaModels(roster.goals);
       return {compositionStatus:missingSlots.length?"incomplete":template.recordPresenceGoals?"recorded_presence_unverified":coverage.some(r=>r.status==="missing")?"incomplete":"conditional",roleCompositionStatus:missingSlots.length||coverage.some(r=>r.status==="missing")?"incomplete":"covered_conditionally",coverage,mana,resourceDependence:resourceModels(roster.goals),control:controlModels(roster.goals),encounter:encounterAssessment(template,roster,settings||{}),coreComposition:template.coreComposition||{dpsRawcodes:dpsCodes,actualDpsCoreCount:dpsCodes.length},missingSlots,
-        currentProfileVersion:"2.323",recordBalance:template.sourceEvidence?.balanceAdjustment||null,
+        currentProfileVersion:nativeMap?targetMapVersion:null,recordBalance:template.sourceEvidence?.balanceAdjustment||null,
         numericCombatStatus:"unverified",clearStatus:"unverified",canConfirmClear:false,evidenceScope:template.evidenceScope||"native_composition_not_verified_clear",
         unresolved:unique([template.recordPresenceGoals?"공개 등록 명단은 전체 보유 유닛과 수량을 확정하지 않음":null,"실효 DPS·공격시간·실전 마나 수지 미검증","제어 중첩·보스 면역·스토리 마감시간 미검증",...(rules.completion?.unresolved||[]),...(template.limitations||[])])};
     }
@@ -1160,7 +1162,7 @@
         templates=[...templates,...variants];
       }
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
-      if(!nativeMap||counts==null||!templates.length&&!(supportAdapter&&missingRandomBases.length)||typeof graph.planDeck!=="function"){
+      if(!nativeMap&&!historicalRosterOnly||counts==null||!templates.length&&!(supportAdapter&&missingRandomBases.length)||typeof graph.planDeck!=="function"){
         const reinforcements=nativeMap&&counts!=null&&typeof graph.planDeck==="function"?reinforcementAdvisor?.recommend(inventory,{...settings,rewardBudget:activeRewardBudget},{}):null;
         return {schemaVersion:1,recommendationPolicy,targetDeck:null,craftTargets:[],order:[],selectedDeckId:null,alternatives:[],...(reinforcements?{reinforcements}:{}),warnings:[...warnings,"전체 목표 구성 자료를 확인하지 못했습니다."],canConfirmClear:false,searchComplete:false,evaluatedDeckCount:0,eligibleDeckCount:0};
       }
@@ -1267,7 +1269,7 @@
       if(handFitAdvisor)rankedQueue=rerankKnown(rankedQueue,queuePrefix,handPreselection,(a,b)=>b-a);
       const firstPerUpgrade=unique(ownedOpportunities.map(o=>rankedQueue.find(t=>t.ownedUpgradeId===o.id)));
       const baseQueue=rankedQueue.filter(t=>!t.ownedUpgradeId&&t.sourceEvidence?.kind!=="role_similar_alternative"),baseFirst=selected&&!selected.ownedUpgradeId&&selected.sourceEvidence?.kind!=="role_similar_alternative"?selected:baseQueue[0];
-      const historical=t=>{const version=t?.sourceEvidence?.balanceAdjustment?.evaluationSourceVersion||t?.sourceEvidence?.balanceAdjustment?.sourceVersion;return Boolean(version&&version!=="2.323");};
+      const historical=t=>{const version=t?.sourceEvidence?.balanceAdjustment?.evaluationSourceVersion||t?.sourceEvidence?.balanceAdjustment?.sourceVersion;return Boolean(version&&version!==targetMapVersion);};
       const completeBaselines=unique([...['physical','magic','hybrid'].map(mode=>baseQueue.find(template=>completeFallbackIds.has(template.id)&&template.direction===mode)),...baseQueue.filter(template=>completeFallbackIds.has(template.id))]).slice(0,4);
       const preferActualLeo=includeKingPathDecks&&(pendingKingPathTargetSelection||settings.manualDeckChoice===false||!settings.preferredDeckId);
       const leoQueue=preferActualLeo?rankedQueue.filter(template=>resolve(template,inventory,settings).goals.some(goal=>goal.rawcode==="h0C8")):[];
@@ -1324,7 +1326,7 @@
         ownedUpperInvestment:target?.ownedUpperInvestment||null,
         combatScenarioReevaluation:{confirmedChange:combatScenarioChanged,performed:combatRecompare,pending:pendingCombatScenarioReplan},
         recommendationPriorityReevaluation:{performed:priorityAutomatic||kingPathTargetSelected,policy:includeKingPathDecks?"selected_king_path_mode_prefers_actual_leo_goals":"leo_king_path_decks_excluded"},
-        recommendationPolicy,supportAdaptationSearch:supportSearch,...(reinforcements?{reinforcements}:{}),recordSelection:recordSet?{compatible:recordSet.compatible,preselection:recordSet.preselection||null,usingRecords,eligibleRecords:recordSet.templates.length,currentEligibleRecords:recordSet.templates.filter(t=>!historical(t)).length,historicalEligibleRecords:recordSet.templates.filter(historical).length,balanceTargetVersion:"2.323",roleSimilarAlternatives:(recordSet.alternatives||[]).length,lockedRecords:recordSet.lockedRecords}:null,warnings,canConfirmClear:false,searchComplete:recordSet?.preselection?.truncated!==true&&(!supportAdapter||!supportSearch.truncated)&&queue.every(template=>candidates.some(c=>c.id===template.id)),evaluatedDeckCount:candidates.length,eligibleDeckCount:allowed.length,planningMs:Date.now()-started};
+        recommendationPolicy,supportAdaptationSearch:supportSearch,...(reinforcements?{reinforcements}:{}),recordSelection:recordSet?{compatible:recordSet.compatible,preselection:recordSet.preselection||null,usingRecords,eligibleRecords:recordSet.templates.length,currentEligibleRecords:recordSet.templates.filter(t=>!historical(t)).length,historicalEligibleRecords:recordSet.templates.filter(historical).length,balanceTargetVersion:targetMapVersion,roleSimilarAlternatives:(recordSet.alternatives||[]).length,lockedRecords:recordSet.lockedRecords}:null,warnings,canConfirmClear:false,searchComplete:recordSet?.preselection?.truncated!==true&&(!supportAdapter||!supportSearch.truncated)&&queue.every(template=>candidates.some(c=>c.id===template.id)),evaluatedDeckCount:candidates.length,eligibleDeckCount:allowed.length,planningMs:Date.now()-started};
     }
     function recommendationInputKey(counts,settings){
       const normalized={...(settings||{})};normalized.kingPathMode=normalizeKingPathMode(normalized);normalized.includeKingPathDecks=normalized.kingPathMode!=="off";normalized.includeMysteriousDecks=normalized.includeMysteriousDecks===true;

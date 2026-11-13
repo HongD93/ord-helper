@@ -114,6 +114,11 @@ if (args.Contains("--self-test-craft-speed"))
     await NikaMaterialChoiceTests.RunAsync();
     return;
 }
+if (args.Contains("--self-test-local-clear-recommendations"))
+{
+    await LocalClearRecommendationStoreTests.RunAsync();
+    return;
+}
 if (args.Contains("--self-test-run-recording"))
 {
     GameProgressionTests.Run();
@@ -124,6 +129,7 @@ if (args.Contains("--self-test-run-recording"))
 }
 if (args.Contains("--self-test"))
 {
+    await LocalClearRecommendationStoreTests.RunAsync();
     ProbeSelfTest.Run();
     GameResourcesTests.Run();
     GameItemsTests.Run();
