@@ -93,7 +93,7 @@
     return records.length===publicData.records.length?publicData:{...publicData,records};
   }
   function create(options) {
-    let state = null, combat = null, mechanics = null, clearRecords = null, rewardData = null, randomDrops = null, combatValidation = null, storyRankings = null, worker = null, ready = false, busy = false;
+    let state = null, combat = null, mechanics = null, clearRecords = null, rewardData = null, randomDrops = null, combatValidation = null, storyRankings = null, bruleeCopy = null, utilityCombat = null, worker = null, ready = false, busy = false;
     let revision = 0, signature = "", session = "", initializedMap = "", loading = false;
     let timer = null, timeout = null, pending = null, result = null, failed = false, destroyed = false;
     let firstInvestment = null, investmentBaseline = null, investmentAmbiguous = false, starterPhaseSeen = false, manualDeckChoice = false, manualDeckChoiceRevision = 0, lastSemanticKey = "", lastBudget = null, blockingRecompute = true, resourceRefreshPending = false;
@@ -346,7 +346,7 @@
       };
       const inventory=combatInventory(state.catalog);
       const workerCatalog=inventory?{...state.catalog,combatInventory:inventory.workerMetadata}:state.catalog;
-      try { worker.postMessage({type:"init", catalog:workerCatalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,
+      try { worker.postMessage({type:"init", catalog:workerCatalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,bruleeCopy,utilityCombat,
         ...(nativeData?{randomDrops,combatValidation}:{}),recordsRevision:activeRecordsRevision}); }
       catch {
         stopWorker(); pending = null; result = null; failed = true;
@@ -473,9 +473,10 @@
       loading = true; show();
       Promise.all(["/data/nightmare-combat.json","/data/nightmare-rules.json","/data/nightmare-clear-records.json"].map(url=>
         fetch(url,{cache:"no-store"}).then(response=>{if(!response.ok)throw new Error("combat_profile_unavailable");return response.json();})
-      ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history]) => {
+      ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json","/data/brulee-copy-2.331.json","/data/nightmare-utility-combat-2.331.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history,copyProfile,utilityProfile]) => {
         if (destroyed) return;
         historicalRecords=history?.schemaVersion===1&&Array.isArray(history.records)&&history.records.length?history:null;
+        bruleeCopy=copyProfile;utilityCombat=utilityProfile;
         loading = false; combat = data; mechanics=rules;if(!publicRecordsData||publicRecordsData.catalogMapHash!==records.catalogMapHash){publicRecordsData=records;publicRecordsRevision=null;localRecordsData=null;localRecordsRevision=null;clearRecords=records;activeRecordsRevision=null;baseRecordIds=(records.records||[]).map(record=>record.id);}rewardData=rewards; randomDrops=drops; combatValidation={unitModels,scenarios,recordEvidence};storyRankings=storyData; failed = false; signature = "";startRecordPolling();schedule(true);
       }).catch(() => {
         if (destroyed) return;

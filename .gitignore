@@ -34,6 +34,8 @@
 # 실행용 데이터·아이콘·추천 snapshot은 서버 전환 전까지 로컬에서 관리한다.
 **/wwwroot/data/*
 !/source/ord-unit-probe/wwwroot/data/combat-inventory-identities.json
+!/source/ord-unit-probe/wwwroot/data/brulee-copy-2.331.json
+!/source/ord-unit-probe/wwwroot/data/nightmare-utility-combat-2.331.json
 **/wwwroot/assets/
 **/wwwroot/nightmare-records-live-*.json
 **/wwwroot/nightmare-records-live-manifest.json
