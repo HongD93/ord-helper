@@ -94,6 +94,37 @@ internal static class PortableStartup
         catch { started.Stop(); started.Dispose(); throw; }
     }
 
+    internal static async Task<bool> RequestGracefulShutdownAsync(PortableServerHandle server)
+    {
+        if (server.HasExited) return true;
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+        { Timeout = TimeSpan.FromSeconds(4) };
+        const string origin = "http://127.0.0.1:8765";
+        try
+        {
+            using var healthResponse = await client.GetAsync(origin + "/api/health").ConfigureAwait(false);
+            if (!healthResponse.IsSuccessStatusCode || healthResponse.Content.Headers.ContentLength > 65536) return false;
+            using var health = JsonDocument.Parse(await healthResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
+            if (health.RootElement.GetProperty("application").GetString() != "ord-unit-probe" ||
+                health.RootElement.GetProperty("processId").GetInt32() != server.ProcessId) return false;
+            using var capabilitiesResponse = await client.GetAsync(origin + "/api/craft/capabilities").ConfigureAwait(false);
+            if (!capabilitiesResponse.IsSuccessStatusCode || capabilitiesResponse.Content.Headers.ContentLength > 65536) return false;
+            using var capabilities = JsonDocument.Parse(await capabilitiesResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var token = capabilities.RootElement.GetProperty("token").GetString();
+            if (string.IsNullOrEmpty(token)) return false;
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin + "/api/shutdown");
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            request.Headers.TryAddWithoutValidation("X-Craft-Token", token);
+            using var response = await client.SendAsync(request).ConfigureAwait(false);
+            return response.StatusCode == System.Net.HttpStatusCode.Accepted;
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException or JsonException or
+            InvalidOperationException or KeyNotFoundException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private static PortableStartupException ProbeFailure(ProbeKind kind) => new(kind == ProbeKind.Foreign
         ? "도우미 연결 주소를 다른 프로그램이 사용 중입니다. 기존 프로그램을 종료한 뒤 다시 실행해 주세요."
         : "수집 프로그램 연결 상태를 확인하지 못했습니다. logs 폴더의 실행 기록을 확인해 주세요.");

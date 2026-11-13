@@ -13,6 +13,7 @@ dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;bo
 .material-option{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.material-alternatives{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:5px}.material-alternatives>.material-caption,.material-alternatives>.material-percent{grid-column:span 2}.material-item{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0}.material-item .material-card{width:100%}.material-craft{padding:3px 9px;border:0;border-radius:3px;background:var(--purple);color:#fff;font-size:9px;cursor:pointer}.material-craft:disabled{background:#e7e2f2;color:#a59bb8;cursor:default}</style></head>
 <body><header class="toolbar"><div class="brand"><h1>원랜디 조합도우미</h1><span id="map-caption">유닛 정보 불러오는 중</span></div><div class="tools"><div class="live-state" id="live-state" data-tone="waiting" role="status"><span class="state-dot" aria-hidden="true"></span><span id="status-text">게임에 연결 중</span></div><span id="owned-total"></span><input id="search" class="search" type="search" placeholder="유닛 검색" aria-label="유닛 검색" autocomplete="off"><select id="sort" class="sort" aria-label="유닛 정렬"><option value="default">기본순</option><option value="owned">보유순</option><option value="name">이름순</option><option value="ready">재료 충족순</option></select><button id="fullscreen" class="tool-button" type="button">전체화면</button></div></header>
 <section id="nightmare-advisor-host"></section>
+<details id="previous-story-rankings" class="filters" hidden><summary>마린포드 스토리 순위 · 2.323[C] 참고</summary><ol id="previous-story-ranking-list" style="max-height:12rem;overflow:auto"></ol></details>
 <details class="filters"><summary>유닛 필터</summary><div class="filter-content"><div class="filter-main"><label><input id="owned-only" type="checkbox">보유 유닛만</label><label><input id="materials-only" type="checkbox">유닛 재료 충족</label><span id="last-updated"></span><span id="craft-availability">게임 조합 준비 중</span><button id="filter-clear" type="button">필터 초기화</button></div><div class="tier-filters" id="tier-filters"></div></div></details>
 <div class="state-banner" id="state-banner" data-tone="waiting">게임에 연결 중</div><div class="craft-feedback" id="craft-feedback" role="status" hidden></div><main class="board-scroll"><div class="board" id="board"></div><div id="catalog-state" class="empty-board">유닛 정보를 불러오는 중</div></main>
 <dialog id="unit-detail" aria-labelledby="detail-name"><div class="detail-topbar"><button id="detail-back" class="detail-nav" type="button" aria-label="이전 유닛">←</button><button class="close-detail" id="close-detail" type="button" aria-label="닫기">×</button></div><div class="detail-header"><div id="detail-icon"></div><div class="detail-title"><h2 id="detail-name"></h2><div id="detail-tier"></div></div><div class="detail-summary"><span id="detail-story" class="detail-story" hidden><span id="detail-story-rank" class="story-rank"></span></span><div class="detail-abilities" id="detail-abilities" hidden></div></div></div><div class="detail-content"><div class="detail-top"><span id="detail-mode"></span><span id="detail-quantity"></span></div><div id="detail-choice" class="detail-choice" hidden></div><select id="recipe-options" aria-label="조합법" hidden></select><div id="recipe-detail"></div></div></dialog><div id="toast" role="status" hidden></div>
@@ -44,7 +45,7 @@ const tierAliases = {
 const unstableStatuses=new Set(["units_changed","world_changed","partial_read"]);
 const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),rows=new Map(),sections=new Map();
 const hiddenTiers=new Set(),collapsedTiers=new Set(),flashTimers=new Map();
-let catalog=null,catalogError=false,liveCounts=null,mode="live",combatMetadata=null,nativeUnitDescriptions=null,recipeGraph=null;
+let catalog=null,catalogError=false,liveCounts=null,mode="live",displayGroups=[],nativeUnitDescriptions=null,recipeGraph=null;
 let storyRankings=null;
 let startingEvolutionForecast=null;
 let liveState={message:"게임에 연결 중",tone:"waiting",checking:false},receivedRevision=0,latestSnapshot=null;
@@ -52,9 +53,10 @@ let detailUnit=null,selectedRecipe=null,selectedMaterialChoiceRawcode=null,toast
 let craftMessage="",craftTone="";
 let craftCapabilities={enabled:false,supportedRecipeIds:new Set(),unsupportedRecipes:new Map(),token:null,continuousCraftSupported:false,choiceWispSupported:false,protectedCountsSupported:false,exactPlanSupported:false,itemRequirementsSupported:false,readableItemRawcodes:new Set(),recipeConditionsSupported:false,specialRecipeConditionsSupported:false,readableConditionTypes:new Set()};
 let craftCapabilityRevision=0,executionPlanCache=new Map();
+const craftUiTraceKeys=new Map();
 let detailStack=[],boardGroups=[],analysisSignature="",analysisCache=new Map(),lastDetailKey="";
 const nightmareIntegration=(()=>{try{return window.OrdNightmareIntegration?.create({
-  host:byId("nightmare-advisor-host"),onOpenUnit:code=>openDetail(code),onCraftTarget:requestRecommendedCraft,onStopCraft:requestCraftStop,
+  host:byId("nightmare-advisor-host"),onOpenUnit:code=>openDetail(code),onCraftTarget:requestRecommendedCraft,onStopCraft:requestCraftStop,onUiState:traceCraftUi,
   formatUnitName:unit=>{const name=cleanName(unit.displayName||unit.name||unitByCode.get(unit.rawcode)?.displayName);return window.OrdUnitResourceSkills?.decorate?window.OrdUnitResourceSkills.decorate(name,unit.rawcode,nativeUnitDescriptions,catalog?.map?.sha256):name;},
   onCraftContextChange:()=>{if(detailUnit){lastDetailKey="";renderDetail();}},
   onShowRecipe:(code,recipeId)=>{
@@ -69,7 +71,17 @@ function updateNightmareAdvisor(){
   nightmareIntegration?.update({catalog,counts:liveCounts,snapshot:latestSnapshot,liveState,
     capabilities:craftCapabilities,receivedAt:liveReceivedAt,craftRunning:Boolean(crafting),activeCraftTarget:crafting?.resultRawcode||null,activeCraftExpectedResults:crafting?.expectedResults||[],craftStopRequested:Boolean(crafting?.stopRequested),craftMessage,craftTone});
 }
-function requestRecommendedCraft(rawcode,target){
+function traceCraftUi(state){
+  const bridge=window.chrome?.webview;
+  if(!bridge)return;
+  const key=JSON.stringify([latestSnapshot?.processId,latestSnapshot?.sessionIdentity,latestSnapshot?.status,state]);
+  if(craftUiTraceKeys.get(state.scope)===key)return;
+  const message={type:"craft-ui-state",...state,snapshotStatus:latestSnapshot?.status||"waiting",
+    snapshotSequence:Number.isSafeInteger(latestSnapshot?.sequence)?latestSnapshot.sequence:null,
+    timestamp:latestSnapshot?.timestamp||null};
+  try{bridge.postMessage(message);craftUiTraceKeys.set(state.scope,key);}catch{}
+}
+function requestRecommendedCraft(rawcode,target,options={}){
   if(crafting||!liveCounts||!craftCapabilities.protectedCountsSupported||!craftCapabilities.exactPlanSupported)return;
   if(target?.rawcode!==rawcode||!target.protectedCounts||!Array.isArray(target.expectedSteps)||!target.expectedSteps.length||target.expectedSteps.length>64)return;
   const expectedSteps=target.expectedSteps;
@@ -77,7 +89,7 @@ function requestRecommendedCraft(rawcode,target){
   const plan={executable:true,steps:expectedSteps,stepCount:expectedSteps.length,usesChoiceWisps:expectedSteps.some(step=>step.type==="choice"),resourceCost:{wood:target.wood,gold:target.gold},nonUnitRequirements:target.nonUnitRequirements||[],itemRequirements:target.itemRequirements||[],conditionRequirements:target.conditionRequirements||[]};
   const recipe=last?.type==="craft"?(recipesByUnit.get(rawcode)||[]).find(item=>String(item.id)===String(last.recipeId)):null;
   if(!recipe){craftFeedback("지금은 조합할 수 없어요.","error");updateNightmareAdvisor();return;}
-  return requestGameCraft(recipe,{plan,protectedCounts:target.protectedCounts,expectedSteps});
+  return requestGameCraft(recipe,{plan,protectedCounts:target.protectedCounts,expectedSteps,overlayActionId:options.overlayActionId});
 }
 
 function normalizeTier(value) {
@@ -106,15 +118,23 @@ function cleanName(value) {
   return String(value || "").replace(/\|c[0-9a-f]{8}/gi,"").replace(/\|r/gi,"").replace(/\|n/gi," ").trim();
 }
 
-function normalizeStoryRankings(data,currentCatalog){
-  if(data?.schemaVersion!==1||!currentCatalog?.map?.sha256||data.catalogMapHash!==currentCatalog.map.sha256||!Array.isArray(data.entries)||!data.entries.length||data.entries.length>512)return null;
+function normalizeStoryRankings(data,currentCatalog,{historical=false}={}){
+  if(data?.schemaVersion!==1||!currentCatalog?.map?.sha256||!Array.isArray(data.entries)||!data.entries.length||data.entries.length>512)return null;
+  if(historical){
+    if(currentCatalog.map.sha256!=="20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d"||
+       data.catalogMapHash!=="0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c")return null;
+  }else if(data.catalogMapHash!==currentCatalog.map.sha256)return null;
   if(data.measurementVersion!==null&&!/^\d+\.\d+$/.test(data.measurementVersion||""))return null;
   const conditions=data.conditions;
   if(conditions?.difficulty!=="악몽"||conditions.story!=="마린포드"||conditions.durationSeconds!==60||conditions.startingHealthPercent!==100||conditions.buffPolicy!=="cooldown"||conditions.holdControl!==false)return null;
   const known=new Map(currentCatalog.units.map(unit=>[unit.rawcode,unit])),entries=new Map(),ranks=new Set();
   for(const entry of data.entries){
     const unit=known.get(entry?.rawcode),metric=entry?.metric,value=entry?.value;
-    if(!unit||unit.playable!==true||cleanName(unit.displayName||unit.properName||unit.name)!==entry.catalogName||normalizeTier(unit.tier)!==normalizeTier(entry.tier)||entries.has(entry.rawcode)||!Number.isSafeInteger(entry.rank)||entry.rank<1||entry.rank>data.entries.length||ranks.has(entry.rank))return null;
+    if(!unit||unit.playable!==true||cleanName(unit.displayName||unit.properName||unit.name)!==entry.catalogName||normalizeTier(unit.tier)!==normalizeTier(entry.tier)){
+      if(historical)continue;
+      return null;
+    }
+    if(entries.has(entry.rawcode)||!Number.isSafeInteger(entry.rank)||entry.rank<1||entry.rank>data.entries.length||ranks.has(entry.rank))return null;
     if(!Number.isFinite(value)||value<=0||!(metric==="completion_seconds"&&value<=60||metric==="damage_percent"&&value<=100))return null;
     entries.set(entry.rawcode,{...entry});ranks.add(entry.rank);
   }
@@ -128,7 +148,19 @@ function renderStoryRank(unit){
 async function loadStoryRankings(){
   try{
     const response=await fetch("/data/nightmare-story-rankings.json",{cache:"no-store",signal:AbortSignal.timeout(4000)});
-    if(!response.ok)return;storyRankings=normalizeStoryRankings(await response.json(),catalog);
+    if(!response.ok)return;
+    const data=await response.json();
+    storyRankings=normalizeStoryRankings(data,catalog);
+    const reference=normalizeStoryRankings(data,catalog,{historical:true});
+    if(reference?.entries.size){
+      const list=byId("previous-story-ranking-list");
+      for(const entry of Array.from(reference.entries.values()).sort((a,b)=>a.rank-b.rank)){
+        const row=makeElement("li","",entry.catalogName+" · "+entry.tier);
+        row.value=entry.rank;
+        list.append(row);
+      }
+      byId("previous-story-rankings").hidden=false;
+    }
     if(detailUnit){lastDetailKey="";renderDetail();}
   }catch{storyRankings=null;}
 }
@@ -221,11 +253,11 @@ function compactName(unit){
   if(unit.rawcode==="H0BK")name=unit.routeMaterialRawcode==="H099"?"니카 (루피 초월)":unit.routeMaterialRawcode==="H0B2"?"니카 (스네이크맨 초월)":"니카";
   else if(unit.rawcode==="e018")name="선택 위습";
   else if(unit.rawcode==="e0IX")name="랜덤 위습";
-  else name=cleanName(unit.meta?.displayName||unit.displayName).replace(/뱀초/g,"스네이크맨").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"");
+  else name=cleanName(unit.boardDisplay?.displayName||unit.displayName).replace(/뱀초/g,"스네이크맨").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"");
   const markers=typeof window!=="undefined"?window.OrdUnitResourceSkills:null;
   return markers?.decorate?markers.decorate(name,unit.rawcode,typeof nativeUnitDescriptions!=="undefined"?nativeUnitDescriptions:null,typeof catalog!=="undefined"?catalog?.map?.sha256:null):name;
 }
-function groupLabel(unit){return unit?.meta?.groupName||tierSettings.get(unit?.tier)?.label||"기타";}
+function groupLabel(unit){return unit?.boardDisplay?.groupName||tierSettings.get(unit?.tier)?.label||"기타";}
 function updateAnalysisCache(){
   const signature=liveCounts===null?"unknown":Array.from(unitByCode.keys()).map(code=>code+":"+(liveCounts.get(code)||0)).join(";")+JSON.stringify([currentResources(),currentItems(),currentRecipeConditions()]);
   if(signature!==analysisSignature){analysisSignature=signature;analysisCache.clear();executionPlanCache.clear();}
@@ -265,7 +297,7 @@ function isReady(code) {
   return (recipesByUnit.get(code) || []).some(recipe => recipeProgress(recipe).ready);
 }
 function usefulUnit(unit){
-  return Boolean(unit.meta||unit.tier==="common"||["e0IX","e018"].includes(unit.rawcode)||(amount(unit.rawcode)||0)>0||
+  return Boolean(unit.boardDisplay||unit.tier==="common"||["e0IX","e018"].includes(unit.rawcode)||(amount(unit.rawcode)||0)>0||
     (recipesByUnit.get(unit.rawcode)||[]).some(recipe=>window.OrdRecipeGraph?.isProductionRecipe?.(recipe)===true));
 }
 
@@ -334,6 +366,11 @@ function renderBoard(){
   const total=Array.from(unitByCode.values()).filter(unit=>unit.visible&&!["e0IX","e018"].includes(unit.rawcode)).reduce((sum,unit)=>sum+(amount(unit.rawcode)||0),0);
   byId("owned-total").textContent=known?"보유 "+numberFormat.format(total)+" · 선택 위습 "+numberFormat.format(amount("e018")||0)+" · 랜덤 위습 "+numberFormat.format(amount("e0IX")||0):"";
   if(detailUnit)renderDetail();
+  const buttons=Array.from(byId("board").querySelectorAll(".recipe-button")).filter(button=>!button.hidden);
+  const blocked=new Map();
+  for(const button of buttons)if(button.disabled){const reason=(button.title||"조합 확인 중").replace(/[0-9][0-9,]*/g,"#");blocked.set(reason,(blocked.get(reason)||0)+1);}
+  traceCraftUi({scope:"board",enabled:buttons.filter(button=>!button.disabled).length,total:buttons.length,
+    connected:liveState.tone==="live",craftRunning:Boolean(crafting),blocked:Object.fromEntries(Array.from(blocked).sort(([a],[b])=>a.localeCompare(b)).slice(0,24))});
 }
 function groupColumn(tier,role){
   if(["common","uncommon","other"].includes(tier))return 0;
@@ -347,8 +384,8 @@ function buildBoard(){
   const assigned=new Set(),wisps=["e018","e0IX"].map(code=>unitByCode.get(code)).filter(Boolean);
   if(wisps.length){boardGroups.push({key:"wisps",label:"보유 위습",column:0,units:wisps});wisps.forEach(unit=>assigned.add(unit.rawcode));}
   let boardOrder=0;
-  for(const source of combatMetadata?.groups||[]){
-    const units=(source.unitRawcodes||[]).map(code=>unitByCode.get(code)).filter(unit=>unit?.visible&&!assigned.has(unit.rawcode)&&unit.meta?.groupName===source.name);
+  for(const source of displayGroups){
+    const units=(source.unitRawcodes||[]).map(code=>unitByCode.get(code)).filter(unit=>unit?.visible&&!assigned.has(unit.rawcode)&&unit.boardDisplay?.groupName===source.name);
     if(!units.length)continue;units.forEach(unit=>{assigned.add(unit.rawcode);unit.boardOrder=boardOrder++;});
     boardGroups.push({key:"source:"+source.name,label:source.name,column:groupColumn(units[0].tier,source.primaryRole),units});
   }
@@ -685,7 +722,7 @@ async function refreshCraftCapabilities() {
   renderBoard();
 }
 
-async function focusGameFromDesktop(requestId) {
+async function focusGameFromDesktop(requestId,overlayActionId) {
   const bridge = window.chrome?.webview;
   if (!bridge) return;
   if (!Number.isInteger(latestSnapshot?.processId)) throw new Error("게임 연결을 확인해 주세요.");
@@ -704,7 +741,8 @@ async function focusGameFromDesktop(requestId) {
       bridge.removeEventListener("message",finished);
       reject(new Error("게임 창으로 전환하지 못했습니다."));
     },3000);
-    try { bridge.postMessage({type:"focus-game",requestId,processId:latestSnapshot.processId}); }
+    try { bridge.postMessage({type:"focus-game",requestId,processId:latestSnapshot.processId,
+      ...(typeof overlayActionId==="string"?{overlayActionId}:{})}); }
     catch (error) {
       clearTimeout(timer);
       bridge.removeEventListener("message",finished);
@@ -737,7 +775,7 @@ async function requestGameCraft(recipe,craftOptions={}) {
   crafting = {requestId,recipeId:String(recipe.id),resultRawcode:recipe.resultUnitRawcode,expectedResults:[...new Set((plan?.steps||[]).map(step=>step.resultRawcode).filter(Boolean))],stepCount,adaptive,submitted:false};
   craftFeedback(stepCount>1?numberFormat.format(stepCount)+"단계 조합 중":nameOf(recipe.resultUnitRawcode)+" 조합 중","waiting");
   renderBoard();
-  try { await focusGameFromDesktop(requestId); }
+  try { await focusGameFromDesktop(requestId,craftOptions.overlayActionId); }
   catch (error) {
     if(crafting?.requestId===requestId&&crafting.stopRequested){crafting=null;craftFeedback("조합을 중지했습니다.","waiting");renderBoard();returnToDesktop(requestId,"stopped");return;}
     crafting = null;
@@ -819,10 +857,20 @@ async function fetchNativeUnitDescriptions(){
 }
 async function loadCatalog(){
   try{
-    const [response,metadata,descriptions]=await Promise.all([fetch("/data/map-catalog.json",{cache:"no-store"}),fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),fetchNativeUnitDescriptions()]);
+    const [response,metadata,descriptions,displayIdentities]=await Promise.all([
+      fetch("/data/map-catalog.json",{cache:"no-store"}),
+      fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
+      fetchNativeUnitDescriptions(),
+      fetch("/board-display-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null)
+    ]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
-    catalog=data;combatMetadata=metadata?.mapSha256===data.map?.sha256&&metadata.units&&Array.isArray(metadata.groups)?metadata:null;nativeUnitDescriptions=descriptions;
+    catalog=data;nativeUnitDescriptions=descriptions;
+    const groupMetadata=metadata?.units&&Array.isArray(metadata.groups)?metadata:null;
+    const combatMetadata=groupMetadata&&groupMetadata.mapSha256===data.map?.sha256?groupMetadata:null;
+    // 목록 분류는 전투 수치와 별개로 유닛의 이름과 등급을 대조한다.
+    const displayUnits=groupMetadata&&displayIdentities?.sourceMapSha256===groupMetadata.mapSha256?displayIdentities.units:null;
+    displayGroups=combatMetadata||displayUnits?groupMetadata.groups:[];
     const wispSettings=combatMetadata?.wispMetadata;
     recipeGraph=window.OrdRecipeGraph?.create(data,{choiceWispRawcode:wispSettings?.commonChoiceRawcode||"e018",...(wispSettings?.verified&&Array.isArray(wispSettings.replacements)?{choiceEligibleRawcodes:wispSettings.replacements}:{})})||null;
     startingEvolutionForecast=window.OrdStartingEvolutionForecast?.create(data,{recipeGraph})||null;
@@ -830,8 +878,12 @@ async function loadCatalog(){
     for(const tier of data.tiers){const normalized=normalizeTier(tier.label||tier.id),label=cleanName(tier.label||tier.id);if(tierSettings.has(normalized)&&label)tierSettings.get(normalized).label=normalized==="special"?"특별함":normalized==="rare"?"희귀함":label;for(const code of tier.unitRawcodes||[])assignments.set(code,{tier:normalized,order:order++});}
     const tierIds=new Map(data.tiers.map(tier=>[String(tier.id),normalizeTier(tier.label||tier.id)]));
     for(const source of data.units){
-      const assigned=assignments.get(source.rawcode),meta=combatMetadata?.units?.[source.rawcode];
-      const unit={...source,displayName:cleanName(source.displayName||source.properName||source.name),tier:assigned?.tier||tierIds.get(String(source.tier))||normalizeTier(source.tier),order:assigned?.order??order++,meta:meta?.sourceVerified===true?meta:null};
+      const assigned=assignments.get(source.rawcode),entry=groupMetadata?.units?.[source.rawcode];
+      const identity=displayUnits?.[source.rawcode];
+      const matchesDisplay=identity&&identity.name===source.displayName&&identity.tier===source.tier;
+      const boardDisplay=entry?.sourceVerified===true&&(combatMetadata||matchesDisplay)
+        ?{displayName:entry.displayName,groupName:entry.groupName}:null;
+      const unit={...source,displayName:cleanName(source.displayName||source.properName||source.name),tier:assigned?.tier||tierIds.get(String(source.tier))||normalizeTier(source.tier),order:assigned?.order??order++,boardDisplay};
       // 2.323 원문에서 확인된 일시 소환체·분신·스킬 효과는 보유 목록에서 제외한다.
       unit.visible=(source.playable===true||["e0IX","e018"].includes(source.rawcode))&&!["h076","h04T","h04Y","h05D","h0CA","h06O"].includes(source.rawcode)&&!/소환/.test(source.displayName||source.name||"");unitByCode.set(unit.rawcode,unit);
       if(unit.visible){if(!unitsByTier.has(unit.tier))unitsByTier.set(unit.tier,[]);unitsByTier.get(unit.tier).push(unit);}

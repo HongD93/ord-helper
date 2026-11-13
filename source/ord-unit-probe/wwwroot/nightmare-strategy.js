@@ -75,7 +75,7 @@
     const recommendationRecordData=data=>!data||includeMysteriousDecks?data:{...data,records:(data.records||[]).filter(record=>!mysteryRows(record.goals)&&!mysteryRows(record.entries)&&!mysteryRows(record.goalProjection?.excluded))};
     const makeRecordProvider=data=>data&&Records?Records.create(catalog,combat,recommendationRecordData(data),{recipeGraph:graph,recordOnly,minRecordVersion,generateAlternatives:!recordOnly,handFitAdvisor}):null;
     const handFitAdvisor=options.handFitRecommendations===true&&HandFit?HandFit.create(catalog,{recipeGraph:graph}):null;
-    const earlyStoryAdvisor=options.earlyStoryRecommendations===true&&EarlyStory?EarlyStory.create(catalog,combat,options.storyRankings,{recipeGraph:graph}):null;
+    const earlyStoryAdvisor=options.earlyStoryRecommendations===true&&EarlyStory?EarlyStory.create(catalog,combat,options.storyRankings,{recipeGraph:graph,materialOnly:historicalRosterOnly}):null;
     let earlyStorySnapshot=null,earlyStoryAdvancedSeen=false;
     const supportAdapter=recordOnly&&options.supportAdaptation===true&&SupportAdaptation?SupportAdaptation.create(catalog,combat,{recipeGraph:graph,unitModels:options.combatValidation?.unitModels}):null;
     const recommendationPolicy=recordOnly?(supportAdapter?"clear_records_with_hand_adapted_support":"original_clear_records_only"):"records_and_native_profiles";
@@ -1090,7 +1090,8 @@
         if(stockRecompare)suppressedPreferredId=settings.preferredDeckId||null;
         pendingStockRecompare=false;
       }
-      if(earlyStoryAdvisor&&nativeMap&&counts!=null){
+      const materialStarter=earlyStoryAdvisor?.materialOnly===true&&(settings.materialStarter===true||craftRunning&&earlyStorySnapshot);
+      if(earlyStoryAdvisor&&(nativeMap||materialStarter)&&counts!=null){
         const manualFinal=Boolean(settings.preferredDeckId)&&settings.manualDeckChoice!==false;
         const ownedAdvanced=Array.from(inventory).some(([code,count])=>count>0&&(includeMysteriousDecks||!mysterious(code))&&code!=="h0C8"&&!investmentMaterialProxies.has(code)&&advanced.has(units.get(code)?.tier)&&units.get(code)?.playable===true&&!excludedSummons.has(code));
         if(ownedAdvanced&&!(craftRunning&&earlyStorySnapshot))earlyStoryAdvancedSeen=true;
@@ -1108,10 +1109,20 @@
           const unitGap=row=>(row.progress?.missingNonChoiceLeaves||[]).reduce((sum,item)=>sum+(item.count||0),0)+Math.max(0,(row.progress?.choiceWispNeeded||0)-(row.progress?.choiceWispAvailable||0)),woodGap=row=>(row.progress?.missingResources||[]).filter(item=>item.type==="WOOD").reduce((sum,item)=>sum+(item.missing??Infinity),0);
           const legalRows=rows.filter(row=>!["recipe_conditions_blocked","unsupported_recipe"].includes(actions.get(row.rawcode)?.reason));
           const percent=row=>finite(row.progress?.percent)?row.progress.percent:-1,ratio=row=>finite(row.progress?.ratio)?row.progress.ratio:-1;
-          legalRows.sort((a,b)=>percent(b)-percent(a)||ratio(b)-ratio(a)||Number(b.ready)-Number(a.ready)||unitGap(a)-unitGap(b)||((actions.get(a.rawcode)?.choiceWisps??a.progress?.choiceWispNeeded??Infinity)-(actions.get(b.rawcode)?.choiceWisps??b.progress?.choiceWispNeeded??Infinity))||woodGap(a)-woodGap(b)||(a.storyRank??Infinity)-(b.storyRank??Infinity)||a.rawcode.localeCompare(b.rawcode));
+          const readyOrder=(a,b)=>Number(b.ready)-Number(a.ready);
+          const materialOnlyFallback=earlyStoryAdvisor.materialOnly&&!earlyStoryAdvisor.historicalStoryReference;
+          legalRows.sort((a,b)=>(materialOnlyFallback?readyOrder(a,b):0)||percent(b)-percent(a)||ratio(b)-ratio(a)||readyOrder(a,b)||unitGap(a)-unitGap(b)||((actions.get(a.rawcode)?.choiceWisps??a.progress?.choiceWispNeeded??Infinity)-(actions.get(b.rawcode)?.choiceWisps??b.progress?.choiceWispNeeded??Infinity))||woodGap(a)-woodGap(b)||(a.storyRank??Infinity)-(b.storyRank??Infinity)||a.rawcode.localeCompare(b.rawcode));
           const top=legalRows.slice(0,3),topCodes=new Set(top.map(row=>row.rawcode));for(const id of ids)if(!topCodes.has(id.slice("early-story:".length)))goalContexts.delete(id);
           if(top.length||earlyStoryAdvisor.candidateCount>0){const targets=top.map(row=>actions.get(row.rawcode)),best=targets.find(target=>target.available===true);selectedId=null;lastSelectedTemplate=null;lastSelectedSupportBase=null;
-            earlyStorySnapshot={schemaVersion:1,phase:"early_story",targetDeck:null,selectedDeckId:null,alternatives:[],earlyStory:{candidates:top,selectedRawcode:top[0]?.rawcode||null,policy:earlyStoryAdvisor.policy,storyMeasurementVersion:earlyStoryAdvisor.storyMeasurementVersion,sourceExperimentVersion:earlyStoryAdvisor.sourceExperimentVersion,relativeQualityFraction:earlyStoryAdvisor.relativeQualityFraction,sourceCandidateCount:earlyStoryAdvisor.sourceCandidateCount,evaluatedCandidateCount:rows.length,craftRunning:false},goalCraftTargets:targets,craftTargets:best?[best]:[],order:top.map(row=>row.rawcode),recommendationPolicy,canConfirmClear:false,searchComplete:true,evaluatedDeckCount:0,eligibleDeckCount:0,planningMs:Date.now()-started};return earlyStorySnapshot;}
+            const earlyStory={
+              candidates:top,selectedRawcode:top[0]?.rawcode||null,policy:earlyStoryAdvisor.policy,
+              ...(earlyStoryAdvisor.materialOnly?{materialOnly:true}:{}),
+              ...(earlyStoryAdvisor.historicalStoryReference?{historicalStoryReference:true}:{}),
+              storyMeasurementVersion:earlyStoryAdvisor.storyMeasurementVersion,sourceExperimentVersion:earlyStoryAdvisor.sourceExperimentVersion,
+              relativeQualityFraction:earlyStoryAdvisor.relativeQualityFraction,sourceCandidateCount:earlyStoryAdvisor.sourceCandidateCount,
+              evaluatedCandidateCount:rows.length,craftRunning:false
+            };
+            earlyStorySnapshot={schemaVersion:1,phase:"early_story",targetDeck:null,selectedDeckId:null,alternatives:[],earlyStory,goalCraftTargets:targets,craftTargets:best?[best]:[],order:top.map(row=>row.rawcode),recommendationPolicy,canConfirmClear:false,searchComplete:true,evaluatedDeckCount:0,eligibleDeckCount:0,planningMs:Date.now()-started};return earlyStorySnapshot;}
           for(const id of ids)goalContexts.delete(id);
         }
         earlyStorySnapshot=null;
