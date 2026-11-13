@@ -98,6 +98,29 @@ function create(options){
   return true;
  }
  function cost(target){const result=[];if(finite(target?.choiceWisps)&&target.choiceWisps>0)result.push("선위 "+target.choiceWisps);if(finite(target?.wood)&&target.wood>0)result.push("목재 "+target.wood);if(target?.resourcesReady===false)result.push("자원 부족");return result.join(" · ");}
+ function bruleeAction(result){
+  const route=!state.calculating&&!state.craftRunning?result?.nextBruleeRoute:null;
+  if(route?.sourceRawcode!=="h08S"||!code(route.targetRawcode)||route.targetRawcode===route.sourceRawcode||!text(route.targetName))return null;
+  const owned=route.sourceOwned===true||Number.isSafeInteger(route.sourceOwned)&&route.sourceOwned>0;
+  const targetName=unitText({rawcode:route.targetRawcode},text(route.targetName));
+  const place=route.targetOwner==="recipe_board"?"조합식의 ":route.targetOwner==="own"?"보유 중인 ":"";
+  const key=text(route.copyHotkey)||"Z";
+  const steps=(owned?"":"브륄레 조합 후 ")+key+"로 "+place+targetName+" 선택";
+  const point=Number.isSafeInteger(route.skillPointCost)&&route.skillPointCost>0?"특성포인트 "+route.skillPointCost:"";
+  const toward=route.towardRawcode!==route.targetRawcode&&text(route.towardName)?text(route.towardName)+" 재료":"";
+  const penalty=finite(route.resultAttackSpeedPercentDelta)&&route.resultAttackSpeedPercentDelta!==0?"복사한 유닛의 공격 속도 "+Math.abs(route.resultAttackSpeedPercentDelta)+"% 감소":"";
+  return {route,owned,label:targetName+" (브륄레)",steps,point,toward,penalty};
+ }
+ function renderBrulee(action){
+  const {route,owned,label,steps,point,toward,penalty}=action,row=el("div","ord-na-next");
+  const name=el("button","ord-na-next-name",label);
+  name.type="button";name.disabled=typeof options.onOpenUnit!=="function";
+  name.title=penalty;
+  name.setAttribute("aria-label",owned?label+" 상세":"샬롯 브륄레 조합 상세");
+  name.addEventListener("click",()=>{if(!destroyed&&!name.disabled)options.onOpenUnit(owned?route.targetRawcode:route.sourceRawcode);});
+  row.append(el("span","ord-na-next-label","다음 제작"),name,el("span","ord-na-next-cost",[toward,steps,point].filter(Boolean).join(" · ")));
+  panel.append(row);
+ }
  function probabilityRange(value){
   const interval=value?.confidence;
   if(value?.status!=="estimated"||!Number.isSafeInteger(value.samples)||value.samples<1||!finite(interval?.lower)||!finite(interval?.upper)||interval.lower<0||interval.upper>1||interval.lower>interval.upper)return null;
@@ -128,16 +151,16 @@ function create(options){
   const head=el("div","ord-na-head"),controls=el("div","ord-na-controls");head.append(el("h2","ord-na-title",materialOnly?"첫 전설·히든":"첫 스토리 유닛"));
   if(materialOnly)head.append(el("span","ord-na-chip",historicalReference?"이전 순위 참고":"재료 기준"));
   appendStop(head);appendPathControls(controls);head.append(controls);panel.append(head);
-  const native=new Map(list(state.catalog?.units).map(unit=>[unit.rawcode,unit])),seen=new Set(),grid=el("div","ord-na-roster"),candidates=list(result.earlyStory?.candidates).filter(candidate=>{const unit=native.get(candidate?.rawcode);if(!code(candidate?.rawcode)||seen.has(candidate.rawcode)||unit?.playable!==true||!["전설","히든"].includes(unit.tier))return false;seen.add(candidate.rawcode);return true;}).slice(0,3);
+  const brulee=bruleeAction(result),native=new Map(list(state.catalog?.units).map(unit=>[unit.rawcode,unit])),seen=new Set(),grid=el("div","ord-na-roster"),candidates=list(result.earlyStory?.candidates).filter(candidate=>{const unit=native.get(candidate?.rawcode);if(!code(candidate?.rawcode)||seen.has(candidate.rawcode)||unit?.playable!==true||!["전설","히든"].includes(unit.tier))return false;seen.add(candidate.rawcode);return true;}).slice(0,3);
   for(const [index,candidate]of candidates.entries()){
-   const unit=native.get(candidate.rawcode),unitName=unitText(unit,text(unit.displayName||unit.properName||unit.name)||"유닛")+" ("+unit.tier+")",owned=Number.isSafeInteger(candidate.owned)&&candidate.owned>=0?candidate.owned:0,required=Number.isSafeInteger(candidate.count)&&candidate.count>0?candidate.count:1,done=owned>=required,row=el("div","ord-na-unit"+(done?" ord-na-owned":"")),name=el("button","ord-na-name"),progress=candidate.progress,bound=value=>Math.max(0,Math.min(100,value));
+   const unit=native.get(candidate.rawcode),owned=Number.isSafeInteger(candidate.owned)&&candidate.owned>=0?candidate.owned:0,required=Number.isSafeInteger(candidate.count)&&candidate.count>0?candidate.count:1,done=owned>=required,unitName=!done&&brulee?.route.targetRawcode===candidate.rawcode?brulee.label:unitText(unit,text(unit.displayName||unit.properName||unit.name)||"유닛")+" ("+unit.tier+")",row=el("div","ord-na-unit"+(done?" ord-na-owned":"")),name=el("button","ord-na-name"),progress=candidate.progress,bound=value=>Math.max(0,Math.min(100,value));
    if(finite(progress?.percent)){const percent=done?100:bound(progress.percent),reachable=done?100:Math.max(percent,bound(finite(progress.choiceReachablePercent)?progress.choiceReachablePercent:percent)),track=el("span","ord-na-progress"),current=el("span","ord-na-progress-current"),choice=el("span","ord-na-progress-choice");current.style.width=percent+"%";choice.style.left=percent+"%";choice.style.width=reachable-percent+"%";choice.dataset.ready=String(progress.canCompleteWithChoiceWisp===true&&reachable>=100);track.append(current,choice);name.append(track,el("span","",Math.round(percent)+"% "+unitName));}else name.textContent=unitName;
    name.type="button";name.disabled=typeof options.onOpenUnit!=="function";name.setAttribute("aria-label",unitName+" 상세");name.addEventListener("click",()=>{if(!destroyed&&!name.disabled)options.onOpenUnit(candidate.rawcode);});row.append(el("span","ord-na-number",index+1),name,el("span","ord-na-count","보유 "+owned+" / "+required));
    if(!done){const candidateTarget=goalTargetFor(candidate.rawcode),last=list(candidateTarget?.expectedSteps).at(-1),whole=candidateTarget?.isWholeGoal===true&&candidateTarget.towardRawcode===candidate.rawcode&&candidateTarget.available===true&&candidateTarget.protectedCounts&&typeof candidateTarget.protectedCounts==="object"&&!Array.isArray(candidateTarget.protectedCounts)&&last?.type==="craft"&&list(state.catalog?.recipes).some(recipe=>String(recipe.id)===String(last.recipeId)&&recipe.resultUnitRawcode===candidate.rawcode),target=whole?candidateTarget:null,action=el("button","ord-na-action","조합");action.type="button";action.disabled=!enabled(target);action.setAttribute("aria-label",unitName+" 조합");action.title=enabled(target)?"필요한 재료부터 "+unitText(unit,text(unit.displayName)||"목표 유닛")+"까지 조합":"현재는 조합할 수 없습니다.";action.addEventListener("click",()=>request(target,candidate.rawcode));row.append(action);}
    const referenceRank=historicalReference&&Number.isSafeInteger(candidate.storyRank)&&candidate.storyRank>0?"참고 "+candidate.storyRank+"위":null;
    row.append(el("span","ord-na-unit-state",done?"보유":referenceRank||"대기"));grid.append(row);
   }
-  panel.append(grid);appendCraftMessage();
+  panel.append(grid);if(brulee)renderBrulee(brulee);appendCraftMessage();
  }
  function renderReinforcements(result){
   if(!result?.reinforcements||result.phase==="early_story"||result.mapCompatible===false)return;
@@ -214,13 +237,13 @@ function create(options){
   appendPathControls(controls);head.append(controls);
   panel.append(head);
   if(!deck||result.mapCompatible===false){panel.append(el("div","ord-na-empty",state.calculating?"목표 덱 확인 중":state.error?"목표 덱을 불러오지 못했습니다.":result?.mapCompatible===true?result.searchComplete===false?"현재 패에 맞는 목표 덱을 찾지 못했습니다.":"현재 패로 이어갈 목표 덱이 없습니다.":"현재 맵의 목표 덱을 확인하지 못했습니다."));if(state.error&&options.onRetry){const retry=el("button","ord-na-name","다시 계산");retry.type="button";retry.addEventListener("click",()=>options.onRetry());panel.append(retry);}renderReinforcements(result);return;}
-  const order=list(result.order).map(item=>typeof item==="string"?item:item.rawcode),positions=new Map(order.map((item,index)=>[item,index+1]));
+  const brulee=bruleeAction(result),order=list(result.order).map(item=>typeof item==="string"?item:item.rawcode),positions=new Map(order.map((item,index)=>[item,index+1]));
   const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
   const goals=list(deck.goals).slice().sort((a,b)=>{const x=goalOrder(a),y=goalOrder(b);for(let i=0;i<x.length;i++)if(x[i]!==y[i])return x[i]-y[i];return 0;});
   const grid=el("div","ord-na-roster");
   for(const [displayIndex,goal] of goals.entries()){
    const target=goalTargetFor(goal.rawcode),owned=finite(goal.owned)?goal.owned:0,required=finite(goal.count)?goal.count:1,done=owned>=required;
-   const unitName=unitText(goal,text(goal.name)||"유닛")+(text(goal.tier)?" ("+goal.tier+")":"");
+   const unitName=!done&&brulee?.route.targetRawcode===goal.rawcode?brulee.label:unitText(goal,text(goal.name)||"유닛")+(text(goal.tier)?" ("+goal.tier+")":"");
    const row=el("div","ord-na-unit"+(done?" ord-na-owned":"")),name=el("button","ord-na-name");
    const progress=goal.progress,bound=value=>Math.max(0,Math.min(100,value));
    if(finite(progress?.percent)){
@@ -272,7 +295,8 @@ function create(options){
   const future=list(deck.acquisitionPlan?.remainingMaterials||deck.planning?.forecast?.futureMaterials).filter(item=>finite(item.count)&&item.count>0);
   if(future.length){const names=future.map(item=>unitText(item,item.rawcode==="h04S"?"초월 쿠마":text(item.name)||"별도 재료")+" "+item.count);panel.append(el("div","ord-na-next-cost","별도 재료 · "+names.join(" · ")));}
   const next=nextCraft(result);
-  if(next){const row=el("div","ord-na-next"),name=el("button","ord-na-next-name",unitText(next,text(next.name)||"다음 유닛")),action=el("button","ord-na-action","조합");name.type=action.type="button";name.disabled=action.disabled=!enabled(next);name.setAttribute("aria-label",name.textContent+" 다음 제작");action.setAttribute("aria-label",name.textContent+" 다음 제작");name.addEventListener("click",()=>request(next));action.addEventListener("click",()=>request(next));row.append(el("span","ord-na-next-label","다음 제작"),name,el("span","ord-na-next-cost",cost(next)),action);panel.append(row);}
+  if(brulee)renderBrulee(brulee);
+  else if(next){const row=el("div","ord-na-next"),name=el("button","ord-na-next-name",unitText(next,text(next.name)||"다음 유닛")),action=el("button","ord-na-action","조합");name.type=action.type="button";name.disabled=action.disabled=!enabled(next);name.setAttribute("aria-label",name.textContent+" 다음 제작");action.setAttribute("aria-label",name.textContent+" 다음 제작");name.addEventListener("click",()=>request(next));action.addEventListener("click",()=>request(next));row.append(el("span","ord-na-next-label","다음 제작"),name,el("span","ord-na-next-cost",cost(next)),action);panel.append(row);}
   const opportunities=list(result.ownedOpportunities);
   if(opportunities.length){const details=el("details","ord-na-condition"),ul=el("ul");details.append(el("summary","","신비함 대안"));for(const item of opportunities){const candidate=alternatives.find(d=>list(item.templateIds).includes(d.id)&&d.mode===deck.mode)||alternatives.find(d=>list(item.templateIds).includes(d.id)),li=el("li"),button=el("button","ord-na-name",unitText(item,text(item.name)||"신비함"));button.type="button";button.disabled=!candidate||busy()||state.calculating;button.setAttribute("aria-label",button.textContent+" 활용 덱 비교");button.addEventListener("click",()=>{if(candidate&&!button.disabled)setSettings({preferredDeckId:candidate.id},{notify:true});});li.append(button,el("span",""," · "+(item.ownedResult>0?"보유 "+item.ownedResult:"재료 "+(item.ownedSource||0))+(item.ownedResult>0?"":item.automaticCraftSupported?"":" · 수동 조합")));ul.append(li);}details.append(ul);panel.append(details);}
   renderReinforcements(result);appendCraftMessage();
@@ -284,6 +308,8 @@ function create(options){
    action:state.craftCanStop===true&&!state.craftStopRequested&&typeof options.onStopCraft==="function"?"stop":null,actionKey:"stop"};
   if(state.priorityAction)return {...state.priorityAction,percent:null,action:null,actionKey:null};
   if(state.error||state.result?.mapCompatible===false)return null;
+  const brulee=bruleeAction(state.result);
+  if(brulee&&!state.calculating)return {title:brulee.label,detail:[brulee.toward,brulee.steps,brulee.point].filter(Boolean).join(" · "),percent:null,action:null,actionKey:null};
   const target=nextCraft(state.result);
   const goals=state.result?.phase==="early_story"?list(state.result.earlyStory?.candidates):list(state.result?.targetDeck?.goals);
   const goal=goals.find(candidate=>candidate.rawcode===(target?.towardRawcode||target?.rawcode))||goals.find(candidate=>(candidate.owned||0)<(candidate.count||1));

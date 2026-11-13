@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "mapSha256": "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d",
+  "scriptSha256": "308258a35af767807cabcc595f0f9513ff1aea52c82bcc0171dbdae6239fef13",
+  "sourceRawcode": "h08S",
+  "creationRecipeId": "A113",
+  "creationHotkey": "X",
+  "copyAbilityRawcode": "A114",
+  "copyHotkey": "Z",
+  "targetAbilityRawcode": "A912",
+  "resultMarkerRawcode": "A115",
+  "resultAttackSpeedPercentDelta": -5,
+  "skillPointCost": 1,
+  "recipeBoardOwnerPlayerIndex": 7,
+  "consumesSource": true,
+  "consumesTarget": false,
+  "resultUsesTargetRawcode": true,
+  "recipeBoardTargetRawcodes": [
+    "h02N", "h02O", "h02P", "h02Q", "h02R", "h02S", "h02T", "h02U", "h02V", "h02W",
+    "h02X", "h02Y", "h02Z", "h030", "h031", "h032", "h033", "h034", "h035", "h036",
+    "h037", "h038", "h039", "h03A", "h03B", "h03C", "h03E", "h03F", "h03G", "h03H",
+    "h03I", "h03K", "h03S", "h042", "h04P", "h087", "h09Z", "h0AH", "h0CM"
+  ],
+  "ownTargetRawcodes": ["h0A8", "h0B7", "h0BQ"],
+  "evidence": {
+    "jass": {
+      "copyResult": { "function": "Bx2", "lines": [20692, 20724] },
+      "copyTargetAndCost": { "function": "Bx3", "lines": [20725, 20746] },
+      "copyAbilityRegistration": { "function": "Bx4", "lines": [20747, 20752] },
+      "recipeBoardLegendRawcodes": { "array": "wO", "lines": [60581, 60620] },
+      "recipeBoardLegendCreation": { "function": "CaW", "lines": [61780, 61793] },
+      "recipeIngredientRegistration": { "function": "CMY", "lines": [50249, 50263] },
+      "bruleeRecipe": { "lines": [63287, 63293] }
+    },
+    "unitAbilities": {
+      "path": "Units/UnitAbilities.slk",
+      "sha256": "f7267a63b8b9e590d37c6e69204bd70349440a66ba5959a2bbf1923f3000909c",
+      "initialTargetAbility": "A912"
+    },
+    "abilityData": {
+      "path": "Units/AbilityData.slk",
+      "sha256": "0f1725b0dae6526e06acf387fd5738c3685f84c8c6d47aeba7c527566cc81445",
+      "resultMarkerAttackSpeedFactorDelta": -0.05
+    },
+    "abilityStrings": {
+      "path": "Units/CampaignAbilityStrings.txt",
+      "copyAbility": "A114",
+      "resultMarker": "A115"
+    },
+    "targetPolicy": "Recipe-board targets are the 40 units created from wO that start with A912, excluding the source rawcode h08S. Own-target codes are A912 legendary units outside that display list and require an observed owned target."
+  }
+}
