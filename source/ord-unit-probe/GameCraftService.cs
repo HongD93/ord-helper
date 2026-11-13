@@ -23,6 +23,8 @@ sealed class GameCraftService
     private readonly HashSet<string> characterRawcodes = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CraftOperation> requests = new(StringComparer.Ordinal);
     private readonly object requestsGate = new();
+    private bool shutdownRequested;
+    private bool shutdownWorkerStarted;
     private readonly SemaphoreSlim inputGate = new(1, 1);
     private readonly string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private readonly string catalogHash = "";
@@ -49,6 +51,8 @@ sealed class GameCraftService
             catalogHash = catalog.RootElement.GetProperty("map").GetProperty("sha256").GetString() ?? "";
             if (catalogHash.Length != 64 || !catalogHash.All(Uri.IsHexDigit))
                 throw new InvalidDataException("Invalid map digest.");
+            if (aliases.RootElement.GetProperty("mapSha256").GetString() != catalogHash)
+                throw new InvalidDataException("Chat aliases and recipes belong to different maps.");
             foreach (var unit in catalog.RootElement.GetProperty("units").EnumerateArray())
                 if (unit.GetProperty("playable").GetBoolean())
                     characterRawcodes.Add(RequiredRawcode(unit, "rawcode"));
@@ -131,6 +135,22 @@ sealed class GameCraftService
 
     public void Map(WebApplication app)
     {
+        app.MapPost("/api/shutdown", (HttpContext context) =>
+        {
+            if (!Authorized(context.Request))
+                return Results.Json(new { status = "failed", message = "이 화면에서 보낸 종료 요청만 처리할 수 있습니다." }, statusCode: 403);
+            var startWorker = false;
+            int pending;
+            lock (requestsGate)
+            {
+                shutdownRequested = true;
+                foreach (var operation in requests.Values) if (operation.IsActive) operation.RequestStop();
+                pending = requests.Values.Count(operation => operation.IsActive);
+                if (!shutdownWorkerStarted) { shutdownWorkerStarted = true; startWorker = true; }
+            }
+            if (startWorker) _ = Task.Run(() => StopWhenIdleAsync(app));
+            return Results.Accepted("/api/health", new { status = "shutting_down", pendingOperations = pending });
+        });
         app.MapGet("/api/craft/capabilities", () => Results.Json(new
         {
             enabled = initializationError is null,
@@ -196,6 +216,8 @@ sealed class GameCraftService
             CraftOperation operation;
             lock (requestsGate)
             {
+                if (shutdownRequested)
+                    return Results.Json(new CraftResult("failed", requestId, "도우미가 종료 중이라 조합을 시작하지 않았습니다."), statusCode: 503);
                 if (requests.TryGetValue(requestId, out var previous))
                 {
                     if (previous.RecipeId != request.RecipeId || !SameProtection(previous.ProtectedCounts, protectedCounts) ||
@@ -227,11 +249,24 @@ sealed class GameCraftService
         });
     }
 
+    private async Task StopWhenIdleAsync(WebApplication app)
+    {
+        while (true)
+        {
+            lock (requestsGate)
+                if (!requests.Values.Any(operation => operation.IsActive) && inputGate.CurrentCount > 0) break;
+            await Task.Delay(100);
+        }
+        app.Lifetime.StopApplication();
+    }
+
     private async Task RunAsync(CraftOperation operation, CraftCommand command, long requestedSequence,
         CancellationToken stopping, WebApplication app)
     {
         var acquired = false;
         var inputAttempted = false;
+        var stage = "waiting_for_input_gate";
+        PlannedCraftStep? activeStep = null;
         ChoiceWispCameraSession? cameraSession = null;
         try
         {
@@ -241,6 +276,7 @@ sealed class GameCraftService
             cameraSession = GameChoiceInput.CreateCameraSession();
             stopping.ThrowIfCancellationRequested();
             if (operation.StopRequested) { operation.CompleteStopped(); return; }
+            stage = "checking_request_snapshot";
             if (!TryReadSnapshot(out var baseline, out var reason))
             {
                 operation.Complete("failed", reason);
@@ -256,6 +292,7 @@ sealed class GameCraftService
                 operation.Complete("failed", "보유량이 갱신되었습니다. 현재 수량을 확인한 뒤 다시 눌러 주세요.");
                 return;
             }
+            stage = "validating_recipe_plan";
             var plan = operation.ExpectedSteps is null
                 ? CraftPlanner.Plan(command.RecipeId, commands.Values, baseline.Counts,
                     allowChoiceWisps: GameChoiceInput.Supported, protectedCounts: operation.ProtectedCounts, items: CraftItems.Read(baseline.Json), recipeConditions: CraftConditions.Read(baseline.Json))
@@ -288,6 +325,8 @@ sealed class GameCraftService
             {
                 stopping.ThrowIfCancellationRequested();
                 if (operation.StopRequested) { operation.CompleteStopped(); return; }
+                activeStep = null;
+                stage = "checking_next_step_snapshot";
                 // 다음 단계로 넘어가기 직전에도 세션과 전체 예상 수량을 다시 확인한다.
                 if (!TryReadSnapshot(out baseline, out reason) || !origin.Session.Matches(baseline.Session) ||
                     !operation.Adaptive && !DeltaMatches(origin, baseline, cumulative))
@@ -297,6 +336,7 @@ sealed class GameCraftService
                 }
                 if (operation.Adaptive)
                 {
+                    stage = "replanning_from_current_inventory";
                     if (!ProtectionPresent(operation.ProtectedCounts, baseline.Counts))
                     {
                         operation.Complete("failed", Stopped(index, "보존할 유닛 수량이 바뀌어 조합을 중단했습니다."));
@@ -332,7 +372,8 @@ sealed class GameCraftService
                 }
                 var total = operation.Adaptive ? index + ChoiceWispBatchPlan.LogicalCount(plan.Steps) : ChoiceWispBatchPlan.LogicalCount(plan.Steps);
                 operation.Progress(index, total);
-                var step = plan.Steps[operation.Adaptive ? 0 : fixedPlanPosition];
+                var step = activeStep = plan.Steps[operation.Adaptive ? 0 : fixedPlanPosition];
+                stage = "checking_step_requirements";
                 var remainingSteps = plan.Steps.Skip(operation.Adaptive ? 0 : fixedPlanPosition).ToArray();
                 if (!TryRemainingResourceCosts(remainingSteps, CraftConditions.Read(baseline.Json), out resourceCosts, out reason) ||
                     !ResourcesAvailable(baseline, resourceCosts[0], out reason))
@@ -359,11 +400,16 @@ sealed class GameCraftService
                 var expected = new Dictionary<string, int>(StringComparer.Ordinal) { [step.ResultRawcode] = step.ResultCount };
                 foreach (var ingredient in step.Ingredients)
                     expected[ingredient.Rawcode] = checked(expected.GetValueOrDefault(ingredient.Rawcode) - ingredient.Count);
-                if (step.Type != "choice") await GameChoiceInput.RestoreCameraAsync(cameraSession!, CancellationToken.None);
+                if (step.Type != "choice")
+                {
+                    stage = "restoring_before_recipe_input";
+                    await GameChoiceInput.RestoreCameraAsync(cameraSession!, CancellationToken.None);
+                }
                 stopping.ThrowIfCancellationRequested();
                 // 각 단계의 정상 입력은 정확히 한 번이다. 실패·시간 초과 뒤에는 재전송하지 않는다.
                 if (!operation.TryBeginStep()) { operation.CompleteStopped(); return; }
                 inputAttempted = true;
+                stage = step.Type == "choice" ? "choice_wisp_input" : "checking_recipe_input";
                 string? inputError;
                 var consumedWispVerified = false;
                 if (stepExecutor is not null)
@@ -385,13 +431,15 @@ sealed class GameCraftService
                         operation.Complete("failed", Stopped(index, "조합 재료 선택을 확인하지 못했습니다."));
                         return;
                     }
-                    inputError = await GameInput.ExecuteAsync(resolvedCommand, baseline.Json, stopping, requireForeground: true);
+                    inputError = await GameInput.ExecuteAsync(resolvedCommand, baseline.Json, stopping,
+                        requireForeground: true, observeStage: value => stage = value);
                 }
                 if (inputError is not null)
                 {
                     operation.Complete("failed", Stopped(index, inputError));
                     return;
                 }
+                stage = "verifying_step_result";
                 var watch = Stopwatch.StartNew();
                 var verified = false;
                 var unexpectedChanges = false;
@@ -496,6 +544,11 @@ sealed class GameCraftService
         {
             try
             {
+                var result = operation.Result;
+                if (result.Status is "failed" or "stopped")
+                    app.Logger.LogWarning("Craft {RequestId} ended at {TimeUtc}: {Status}, stage {Stage}, progress {Completed}/{Total}, requested {Recipe}, step {StepType} {StepRecipe} -> {StepResult}: {Reason}",
+                        operation.RequestId, DateTimeOffset.UtcNow, result.Status, stage, result.CompletedSteps, result.TotalSteps,
+                        operation.RecipeId, activeStep?.Type, activeStep?.RecipeId, activeStep?.ResultRawcode, result.Message);
                 if (cameraSession is not null) await GameChoiceInput.RestoreCameraAsync(cameraSession, CancellationToken.None);
             }
             finally
@@ -755,6 +808,7 @@ sealed class GameCraftService
         public bool StopRequested { get { lock (gate) return stopRequested; } }
         public CraftResult Result => Volatile.Read(ref result);
         private bool Terminal => result.Status is "succeeded" or "failed" or "unsupported" or "stopped";
+        public bool IsActive => !Terminal;
         public CraftResult RequestStop()
         {
             lock (gate)

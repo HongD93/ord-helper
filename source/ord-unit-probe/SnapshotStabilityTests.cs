@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 static class SnapshotStabilityTests
 {
     internal static void Run()
@@ -39,6 +41,59 @@ static class SnapshotStabilityTests
             "shared-choice and random-grade wisp changes invalidate the reward inventory sample");
         Check(!SnapshotStability.SameInventory(first, new([unit], 1), ids), "partial memory reads remain blocked");
         Check(!SnapshotStability.SameInventory(first, null, ids), "a missing second sample remains blocked");
+
+        var timed = new[] { "h05D", "h06N", "h0CB", "h0B8", "h0B9", "h0BA", "h0BB", "h078", "h076", "h079", "h0CP" };
+        var liveIds = ids.Concat(timed).Concat(["h00H", "h0AF", "h067", "H099", "H0B2", "H08T", "H0BK", "H093", "H091", "H0B6"])
+            .ToHashSet(StringComparer.Ordinal);
+        var mapHash = GameProgression.SupportedMapHash;
+        var catalog = JsonSerializer.SerializeToElement(new
+        {
+            map = new { sha256 = mapHash },
+            units = liveIds.Append("h0F5").Select(rawcode => new { rawcode }),
+            recipes = new object[]
+            {
+                new { resultUnitRawcode = "h067", ingredients = new[] { new { type = "KING", rawcode = "h067" } } },
+                new { resultUnitRawcode = "h002", ingredients = new[] { new { type = "UNIT", rawcode = "h00H" } }, casterUnitRawcodes = new[] { "h001" } },
+                new { resultUnitRawcode = "H0BK", ingredients = new[] { new { type = "UNIT", rawcode = "H099", logicalRawcode = "H08T", acceptedRawcodes = new[] { "H099", "H0B2" } } } }
+            },
+            progressTransformations = new { entries = new[] { new { sourceRawcode = "H091", resultRawcode = "H093" } } }
+        });
+        LiveInventoryIdentity? Parse(string[] temporary, Dictionary<string, string> canonical, string? declaredHash = null) =>
+            LiveInventoryIdentity.Parse(JsonSerializer.SerializeToElement(new
+            {
+                schemaVersion = 1, mapSha256 = declaredHash ?? mapHash,
+                temporaryRawcodes = temporary, canonicalByRawcode = canonical
+            }), catalog, mapHash, liveIds);
+        var utaForms = new Dictionary<string, string>(StringComparer.Ordinal) { ["h0AF"] = "h067" };
+        var identity = Parse([..timed, "h0F5"], utaForms);
+        Check(identity is not null, "verified map permits non-recipe effects and a canonical recipe result");
+        Check(Parse(timed, utaForms, new string('0', 64)) is null, "another map cannot supply live identity rules");
+        Check(new[] { "h001", "h002", "h00H", "H08T", "H0B2", "H091", "H093", "xxxx" }.All(code => Parse([code], utaForms) is null),
+            "casters, recipe results, real and accepted materials, progression forms and unknown codes cannot be excluded");
+        Check(new[] { "h00H", "H0B2", "H093" }.All(code => Parse(timed, new() { ["h0AF"] = code }) is null),
+            "material and paid progression identities cannot be merged");
+        Check(Parse(timed, new() { ["H093"] = "H091" }) is null && Parse(timed, new() { ["H091"] = "H0B6" }) is null &&
+            Parse(timed, new() { ["H0B6"] = "H091" }) is not null,
+            "a reversible form can use the pre-progression unit as its canonical identity without merging the paid change");
+        Check(Parse(["h0AF"], utaForms) is null, "temporary/form conflicts are rejected");
+
+        OwnedData Add(UnitObject extra) => new([unit, extra], 0);
+        var timedRows = timed.Select((code, index) => new UnitObject(0x80000u + (uint)index, code, 6, 0)).ToArray();
+        var activeSummons = new OwnedData([unit, ..timedRows], 0);
+        Check(SnapshotStability.SameLiveInventory(first, activeSummons, liveIds, identity) &&
+            SnapshotStability.SameLiveInventory(activeSummons, first, liveIds, identity), "all audited timed spawns and expirations preserve live stability");
+        Check(!SnapshotStability.SameInventory(first, activeSummons, liveIds), "command verification still uses raw object identities");
+        var uta = new UnitObject(0x8A000, "h067", 6, 0);
+        var utaForm = uta with { Rawcode = "h0AF" };
+        Check(SnapshotStability.SameLiveInventory(Add(uta), Add(utaForm), liveIds, identity) &&
+            SnapshotStability.SameLiveInventory(Add(utaForm), Add(uta), liveIds, identity), "same-address Uta combat form switches preserve live stability");
+        Check(!SnapshotStability.SameInventory(Add(uta), Add(utaForm), liveIds), "command verification distinguishes both Uta rawcodes");
+        Check(!SnapshotStability.SameLiveInventory(Add(uta), Add(utaForm with { Address = 0x8B000 }), liveIds, identity) &&
+            !SnapshotStability.SameLiveInventory(Add(uta), first, liveIds, identity), "moving to another object or losing an owned form still invalidates live stability");
+        Check(!SnapshotStability.SameLiveInventory(first, Add(new(0x8C000, "h00H", 6, 0)), liveIds, identity),
+            "a real zombie ingredient changes live stability");
+        Check(!SnapshotStability.SameLiveInventory(first, activeSummons with { ReadErrors = 1 }, liveIds, identity),
+            "temporary objects cannot bypass a read failure");
         Console.WriteLine($"PASS: inventory snapshot stability ({passed} checks).");
     }
 }

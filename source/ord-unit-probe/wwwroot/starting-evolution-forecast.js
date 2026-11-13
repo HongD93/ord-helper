@@ -5,6 +5,7 @@
 })(typeof globalThis!=="undefined"?globalThis:this,function(Graph){
   "use strict";
   const finite=value=>typeof value==="number"&&Number.isFinite(value),bounded=value=>Math.max(0,Math.min(100,value));
+  const targetKills=140;
   const tiers={rare:new Set(["rare","희귀","희귀함"]),special:new Set(["special","특별","특별함"])};
   const rawcode=value=>typeof value==="string"&&/^[A-Za-z0-9]{4}$/.test(value);
   function reachable(analysis){
@@ -28,9 +29,9 @@
         snapshot.catalogMatchesLoadedArchive!==true||snapshot.loadedMapHash!==hash||snapshot.gameVersion!=="1.28.5.7680"||!Number.isSafeInteger(snapshot.processId)||snapshot.processId<=0||
         !Number.isInteger(player)||player<0||player>3||state?.status!=="confirmed"||state.localPlayer!==player||
         progression?.status!=="confirmed"||progression.localPlayer!==player||progression.activePlayer!==true||progression.gameEnded!==false||progression.victory===true||
-        !["charging","activating"].includes(state.phase)||state.pendingCount!==1||state.targetKills!==152||
-        !Number.isSafeInteger(state.killCount)||state.killCount<0||state.killCount>152||!rawcode(state.resultRawcode)||
-        state.phase==="charging"&&state.killCount>=152||state.phase==="activating"&&state.killCount!==152||
+        !["charging","activating"].includes(state.phase)||state.pendingCount!==1||state.targetKills!==targetKills||
+        !Number.isSafeInteger(state.killCount)||state.killCount<0||state.killCount>targetKills||!rawcode(state.resultRawcode)||
+        state.phase==="charging"&&state.killCount>=targetKills||state.phase==="activating"&&state.killCount!==targetKills||
         result?.playable!==true||result.isSummon===true||result.isSummoned===true||!tiers.special.has(tierOf(result))||
         source?.readOnly!==true||source.mapSha256!==hash||!Number.isSafeInteger(source.sampleCount)||source.sampleCount<2||
         !Array.isArray(snapshot.counts))return reject();

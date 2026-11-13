@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "mapSha256": "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d",
+  "temporaryRawcodes": [
+    "e0GW", "e0GX", "e0H1", "h000", "h04T", "h04Y", "h05D", "h06H", "h06N",
+    "h06O", "h076", "h077", "h078", "h079", "h07G", "h07O", "h0AG", "h0B8",
+    "h0B9", "h0BA", "h0BB", "h0BP", "h0C5", "h0C7", "h0CB", "h0CP", "h0F5"
+  ],
+  "canonicalByRawcode": {
+    "H09C": "H09B",
+    "H09D": "H09E",
+    "H0B6": "H091",
+    "H0BE": "H0BD",
+    "H0BO": "H0BL",
+    "H0BV": "H08Y",
+    "H0BY": "H0BX",
+    "H0C0": "H0BZ",
+    "H0CL": "H08W",
+    "h09Q": "h08O",
+    "h0AD": "h07M",
+    "h0AF": "h067",
+    "h0BW": "h07M",
+    "h0CE": "h09M"
+  }
+}

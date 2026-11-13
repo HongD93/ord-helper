@@ -7,9 +7,9 @@ using System.Text.Json.Serialization;
 static class GameProgression
 {
     internal const string SupportedVersion = "1.28.5.7680";
-    internal const string SupportedMapHash = "0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c";
-    internal const string ScriptHash = "96201e80edec1b2764f85818760306c6b2f0becd390ba4d63f41c86f3dfaff6d";
-    private static readonly string[] Names = ["X3", "on", "NE", "sJ", "Ji", "YU"];
+    internal const string SupportedMapHash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+    internal const string ScriptHash = "308258a35af767807cabcc595f0f9513ff1aea52c82bcc0171dbdae6239fef13";
+    private static readonly string[] Names = ["Y3", "qf", "Nr", "t9", "KJ", "ZU"];
 
     internal sealed record State(
         [property: JsonPropertyName("status")] string Status,
@@ -29,7 +29,7 @@ static class GameProgression
         [JsonPropertyName("randomWisp")]
         public GameRandomState.State RandomWisp { get; init; } = GameRandomState.Unknown("not_captured");
 
-        // YU는 맵 전체 승리 표식이다. 내 플레이어의 승패/퇴장 판정은 별도로 대조해야 한다.
+        // ZU는 맵 전체 승리 표식이다. 내 플레이어의 승패/퇴장 판정은 별도로 대조해야 한다.
         [JsonPropertyName("victory")]
         public bool? Victory { get; init; }
 
@@ -113,18 +113,18 @@ static class GameProgression
                 first.Mask != second.Mask || first.Player != second.Player || !first.Entries.SequenceEqual(second.Entries))
                 return Unknown("progression_changing");
             var values = second.Entries.ToDictionary(entry => entry.Name, entry => unchecked((int)entry.Value), StringComparer.Ordinal);
-            if (values["X3"] is < 0 or > 65 || values["on"] is < 0 or > 14 || values["NE"] is < 0 or > 6 ||
-                values["sJ"] is < 0 or > 10000 || values["Ji"] is < 0 or > 1 || values["YU"] is < 0 or > 1)
+            if (values["Y3"] is < 0 or > 65 || values["qf"] is < 0 or > 14 || values["Nr"] is < 0 or > 6 ||
+                values["t9"] is < 0 or > 10000 || values["KJ"] is < 0 or > 1 || values["ZU"] is < 0 or > 1)
                 return Unknown("progression_out_of_supported_range");
             var slotKnown = first.PlayerSlotState is not null && first.PlayerSlotState == second.PlayerSlotState;
             var slotReason = slotKnown ? "two_matching_native_player_slot_reads" : first.PlayerSlotState != second.PlayerSlotState ? "player_slot_state_changing" : second.SlotStateReason;
-            return new("confirmed", roots.LocalPlayer, values["X3"], values["on"], values["Ji"] == 1,
-                values["NE"] == 6 ? "nightmare" : values["NE"] == 0 ? "unknown" : "other", values["NE"],
-                values["YU"] == 1 || values["Ji"] == 0, values["sJ"], "unknown", "exclude_current_round", new(StringComparer.Ordinal),
+            return new("confirmed", roots.LocalPlayer, values["Y3"], values["qf"], values["KJ"] == 1,
+                values["Nr"] == 6 ? "nightmare" : values["Nr"] == 0 ? "unknown" : "other", values["Nr"],
+                values["ZU"] == 1 || values["KJ"] == 0, values["t9"], "unknown", "exclude_current_round", new(StringComparer.Ordinal),
                 Source("two_matching_named_jass_global_reads", 2) with
                 {
                     SlotState = new(slotKnown ? "confirmed" : "unknown", slotReason, true, slotKnown ? 2 : 0, ["234210", "233F50"], "0x270")
-                }) { Victory = values["YU"] == 1, PlayerSlotState = slotKnown ? second.PlayerSlotState : null };
+                }) { Victory = values["ZU"] == 1, PlayerSlotState = slotKnown ? second.PlayerSlotState : null };
 
             Sample ReadSample()
             {
@@ -161,13 +161,13 @@ static class GameProgression
                                 if (found is not null) throw new ProgressionReadException("duplicate_global_name");
                                 var type = BitConverter.ToUInt32(data, 0x1C); var array = BitConverter.ToUInt32(data, 0x18);
                                 var value = BitConverter.ToUInt32(data, 0x20); uint header = 0, size = 0, arrayData = 0;
-                                var expectedType = name == "Ji" ? 13u : name == "YU" ? 8u : 4u;
+                                var expectedType = name == "KJ" ? 13u : name == "ZU" ? 8u : 4u;
                                 if (type != expectedType || !GlobalValueTagMatches(expectedType, array, value))
                                     throw new ProgressionReadException("unexpected_global_type")
                                     {
                                         TypeMismatch = new(name, expectedType, type, AllowedGlobalValueTags(expectedType), array)
                                     };
-                                if (name == "Ji")
+                                if (name == "KJ")
                                 {
                                     header = Ptr(value); size = U32(checked(header + 8)); arrayData = Ptr(U32(checked(header + 12)));
                                     if (size > 8192 || size <= roots.LocalPlayer) throw new ProgressionReadException("invalid_global_array");
@@ -246,6 +246,6 @@ static class GameProgression
     private static uint Ptr(uint value) => Pointer(value) ? value : throw new ProgressionReadException("invalid_progression_pointer");
     private static bool Pointer(uint value) => value is >= 0x10000 and <= 0x7FFF0000;
     private static Evidence Source(string reason, int samples) => new("read_only_1285_named_jass_globals", reason, true, samples,
-        SupportedMapHash, ScriptHash, [137, 138, 232, 233, 243, 249, 253, 257, 315, 3861, 3862, 4739, 8514, 8520, 59116, 59290, 59306, 59323, 59332, 59334, 59472, 59474, 59757],
+        SupportedMapHash, ScriptHash, [138, 139, 226, 232, 236, 240, 298, 4157, 4158, 4161, 4933, 8635, 54568, 57119, 59700, 59730, 61002, 61003, 61176, 61192, 61209, 61218],
         ["0D63FA", "0D6405", "095DF0", "8BFA83", "8C1666", "8C4180", "8BE62D", "8CB01A", "Storm:ordinal590"], Names, false, false);
 }

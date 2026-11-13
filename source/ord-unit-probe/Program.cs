@@ -18,6 +18,7 @@ var jsonOptions = new JsonSerializerOptions { WriteIndented = true, Encoder = Ja
 var lineOptions = new JsonSerializerOptions(jsonOptions) { WriteIndented = false };
 var sampleCount = GetInt("--samples", 1, 1, 600);
 var interval = GetInt("--interval-ms", args.Contains("--serve") ? 250 : 1000, 100, 60000);
+var serving = args.Contains("--serve");
 var output = GetString("--output");
 var catalogPath = GetString("--catalog");
 var names = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -40,13 +41,31 @@ if (catalogPath is not null)
 var mapHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 var inventoryIds = new HashSet<string>(characterIds, StringComparer.Ordinal) { "e018", "e0IX", "e01A", "e017", "e016", "e019", "e015" };
 var playableCatalogPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "map-catalog.json");
-if (catalogHash is not null && File.Exists(playableCatalogPath))
+var playableCatalogMatches = false;
+LiveInventoryIdentity? liveInventoryIdentity = null;
+if (catalogHash == GameProgression.SupportedMapHash && File.Exists(playableCatalogPath))
 {
     using var playableCatalog = JsonDocument.Parse(File.ReadAllText(playableCatalogPath));
-    if (playableCatalog.RootElement.GetProperty("map").GetProperty("sha256").GetString() == catalogHash)
+    var map = playableCatalog.RootElement.GetProperty("map");
+    if (map.GetProperty("sha256").GetString() == catalogHash &&
+        map.TryGetProperty("scriptSha256", out var scriptHash) && scriptHash.GetString() == GameProgression.ScriptHash)
+    {
+        playableCatalogMatches = true;
+        // 같은 맵 해시의 정적 분류를 최종 기준으로 사용해 최신 등급명과 접미사가 없는 유닛을 포함한다.
+        characterIds.Clear();
+        inventoryIds.Clear();
+        inventoryIds.UnionWith(new[] { "e018", "e0IX", "e01A", "e017", "e016", "e019", "e015" });
         foreach (var unit in playableCatalog.RootElement.GetProperty("units").EnumerateArray())
+        {
+            var rawcode = unit.GetProperty("rawcode").GetString()!;
             if (unit.TryGetProperty("playable", out var playable) && playable.ValueKind == JsonValueKind.True)
-                inventoryIds.Add(unit.GetProperty("rawcode").GetString()!);
+                inventoryIds.Add(rawcode);
+            if (UnitRules.IsCharacterCatalogUnit(unit)) characterIds.Add(rawcode);
+        }
+        liveInventoryIdentity = LiveInventoryIdentity.Load(
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "combat-inventory-identities.json"),
+            playableCatalog.RootElement, GameProgression.SupportedMapHash, inventoryIds);
+    }
 }
 if (args.Contains("--fixture"))
 {
@@ -99,6 +118,11 @@ if (args.Contains("--self-test-craft-speed"))
     await NikaMaterialChoiceTests.RunAsync();
     return;
 }
+if (args.Contains("--self-test-local-clear-recommendations"))
+{
+    await LocalClearRecommendationStoreTests.RunAsync();
+    return;
+}
 if (args.Contains("--self-test-run-recording"))
 {
     GameProgressionTests.Run();
@@ -109,6 +133,7 @@ if (args.Contains("--self-test-run-recording"))
 }
 if (args.Contains("--self-test"))
 {
+    await LocalClearRecommendationStoreTests.RunAsync();
     ProbeSelfTest.Run();
     GameResourcesTests.Run();
     GameItemsTests.Run();
@@ -143,7 +168,7 @@ if (args.Contains("--self-test"))
     await NikaMaterialChoiceTests.RunAsync();
     return;
 }
-if (args.Contains("--serve"))
+if (serving)
 {
     await LiveCounterServer.RunAsync(CaptureSafely, jsonOptions, lineOptions, GetInt("--port", 8765, 1024, 65535), interval, output);
     return;
@@ -217,7 +242,10 @@ object Capture()
         var second = SnapshotStability.SameSession(middle, roots) ? memory.ReadOwnedUnits(middle!) : null;
         var after = memory.ReadRoots(moduleBase + UiRva, moduleBase + PlayerRva);
         var stable = SnapshotStability.SameSession(middle, roots) && SnapshotStability.SameSession(after, roots);
-        var stableUnits = SnapshotStability.SameInventory(data, second, inventoryIds);
+        var catalogMatchesLoadedArchive = catalogHash == GameProgression.SupportedMapHash && loadedMapHash == catalogHash &&
+            (!serving || playableCatalogMatches);
+        var stableUnits = SnapshotStability.SameLiveInventory(data, second, inventoryIds,
+            catalogMatchesLoadedArchive ? liveInventoryIdentity : null);
         var readErrors = data.ReadErrors + (second?.ReadErrors ?? 0);
         var elder = stable ? ElderDetector.Capture(memory, roots, moduleBase, loadedMapHash)
                            : ElderDetector.Unknown("session_changed");
@@ -240,7 +268,7 @@ object Capture()
             gameVersion = version,
             loadedMap,
             loadedMapHash,
-            catalogMatchesLoadedArchive = catalogHash is not null && loadedMapHash == catalogHash,
+            catalogMatchesLoadedArchive,
             gameState1,
             gameState2,
             localPlayer = roots.LocalPlayer,

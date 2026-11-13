@@ -19,7 +19,8 @@ static class GameInput
         !Targeted.Contains(command.RecipeId) && command.Hotkey is { Length: 1 } key &&
         "BCXZ".Contains(key[0]) && command.CasterUnitRawcodes.Length > 0;
 
-    public static async Task<string?> ExecuteAsync(CraftCommand command, JsonElement baseline, CancellationToken cancel, bool requireForeground = false)
+    public static async Task<string?> ExecuteAsync(CraftCommand command, JsonElement baseline, CancellationToken cancel,
+        bool requireForeground = false, Action<string>? observeStage = null)
     {
         if (command.ChatCommand is not null && !IsKoreanChatCommand(command.ChatCommand))
             return "한글 조합 명령을 확인하지 못했습니다.";
@@ -27,6 +28,7 @@ static class GameInput
         void TraceChat(string stage, string? detail = null)
         {
             chatStage = stage;
+            observeStage?.Invoke("chat_" + stage);
             try { Console.Error.WriteLine(JsonSerializer.Serialize(new { component = "ord_chat_input", timestamp = DateTimeOffset.UtcNow,
                 recipeId = command.RecipeId, stage, detail })); }
             catch (Exception error) when (error is IOException or InvalidOperationException) { }
@@ -103,8 +105,10 @@ static class GameInput
                 cancel.ThrowIfCancellationRequested();
                 GetWindowThreadProcessId(window, out var initialOwner);
                 if (initialOwner != process.Id) return "게임 창이 바뀌어 입력하지 않았습니다.";
+                observeStage?.Invoke("selecting_recipe_caster");
                 var selected = await GameSelection.EnsureCasterAsync(memory, moduleBase, initial, window, command, active, cancel);
                 if (selected.Error is not null) return selected.Error;
+                observeStage?.Invoke("rechecking_before_hotkey");
                 if (!ReadInventory(out var beforeHotkey) || !HasIngredients(command, beforeHotkey!) || !ItemsPresent() || !ConditionsPresent())
                     return "조합 재료가 바뀌어 입력하지 않았습니다. 보유량을 확인해 주세요.";
                 GetWindowThreadProcessId(window, out var owner);
@@ -114,6 +118,7 @@ static class GameInput
                     GameSelection.ReadSingleSelectedAddress(memory, initial) != selected.Address ||
                     !SelectedCaster(memory, initial, command)) return "게임이나 선택한 유닛이 바뀌어 입력하지 않았습니다.";
                 cancel.ThrowIfCancellationRequested();
+                observeStage?.Invoke("posting_recipe_hotkey");
                 PostKey(window, (ushort)command.Hotkey![0]);
                 return null;
             }
@@ -147,13 +152,11 @@ static class GameInput
                 () => GameChatText.Matches(GameChatText.Read(memory, moduleBase, initial), command.ChatCommand), cancel,
                 stage => TraceChat(stage));
             TraceChat(typing.OriginalImeRestored ? "typing_completed" : "typing_completed_with_ime_warning", typing.RestorationError);
-            await Task.Delay(50, cancel);
             if (GetForegroundWindow() != window || !ChatOpen(memory, moduleBase))
                 return "채팅 입력 중 게임 화면이 바뀌었습니다. 입력한 내용을 확인해 주세요.";
             var typed = GameChatText.Read(memory, moduleBase, initial);
             if (!GameChatText.Matches(typed, command.ChatCommand))
                 return "한글 명령이 정확히 입력되지 않아 전송하지 않았습니다. 채팅창을 닫고 다시 눌러 주세요.";
-            await Task.Delay(30, cancel);
             return await GameChatSubmission.SubmitWithAsyncEnterAsync(command.ChatCommand, typed,
                 () => GameChatText.Read(memory, moduleBase, initial),
                 () => GetForegroundWindow() == window && SameGameWindow() && ChatOpen(memory, moduleBase) && !KeysHeld() &&

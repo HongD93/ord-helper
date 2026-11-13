@@ -135,6 +135,16 @@ static class LiveCounterServer
         app.MapGet("/api/health", () => new { application = "ord-unit-probe", processId = Environment.ProcessId });
         app.MapGet("/api/snapshot", () => Results.Text(publications.Current.Json, "application/json", Encoding.UTF8));
         var dataDirectory = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data");
+        var localClearStore = outputPath is null ? null : new LocalClearRecommendationStore(
+            RunDataDirectory(outputPath), Path.GetDirectoryName(dataDirectory)!,
+            (error, destination) => app.Logger.LogWarning(error, "Local clear {Destination} is unavailable; previous recommendations are retained and refresh retries.", destination));
+        app.MapGet("/api/local-clear-records/manifest", () => localClearStore is null
+            ? (IResult)Results.NotFound()
+            : Results.Text(localClearStore.ManifestJson, "application/json", Encoding.UTF8));
+        app.MapGet("/api/local-clear-records/{revision}.json", (string revision) =>
+            localClearStore?.SnapshotJson(revision) is { } snapshot
+                ? (IResult)Results.Text(snapshot, "application/json", Encoding.UTF8)
+                : Results.NotFound());
         var crafting = new GameCraftService(() => publications.Current.Json,
             Path.Combine(dataDirectory, "map-catalog.json"), Path.Combine(dataDirectory, "chat-craft-commands.json"),
             waitForSnapshot: publications.WaitForNewerAsync,
@@ -191,11 +201,29 @@ static class LiveCounterServer
                 app.Logger.LogError(error, "Collector stopped.");
             }
         });
+        // 파일 검증과 발행은 게임 수량 수집·입력 경로와 별개로 수행한다.
+        var localClearRefresh = Task.Run(async () =>
+        {
+            if (localClearStore is null) return;
+            var cancel = app.Lifetime.ApplicationStopping;
+            try
+            {
+                while (!cancel.IsCancellationRequested)
+                {
+                    try { await localClearStore.RefreshAsync(cancel); }
+                    catch (OperationCanceledException) when (cancel.IsCancellationRequested) { break; }
+                    catch (Exception error) { app.Logger.LogWarning(error, "Local clear refresh failed; the next refresh retries."); }
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancel);
+                }
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+        });
         try { await app.RunAsync(); }
         finally
         {
             app.Lifetime.StopApplication();
             await producer;
+            await localClearRefresh;
             if (runRecorder is not null) await runRecorder.StopAsync(CancellationToken.None);
         }
     }

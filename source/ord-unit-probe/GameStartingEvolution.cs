@@ -3,9 +3,10 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json.Serialization;
 
-// 시작 진화체의 확정된 중립 유닛과152킬 진행을 읽는다. 보유 재고나 조합 가능 수량은 바꾸지 않는다.
+// 시작 진화체의 확정된 중립 유닛과 140킬 진행을 읽는다. 보유 재고나 조합 가능 수량은 바꾸지 않는다.
 static class GameStartingEvolution
 {
+    internal const int TargetKills = 140;
     internal static readonly string[] SpecialPool = ["h01K", "h00Q", "h00B", "h00P", "h00S", "h00R", "h00W", "h00T", "h00U", "h017", "h016", "h015", "h014", "h013", "h01F", "h012", "h011", "h00Z", "h00Y", "h00X", "h018", "h019", "h01C", "h00V", "h01A", "h01B", "h01D", "h01E", "h01H", "h01G", "h01J", "h01I"];
     internal sealed record State(
         [property: JsonPropertyName("status")] string Status,
@@ -60,7 +61,7 @@ static class GameStartingEvolution
             if (second.Handle == 0)
             {
                 if (second.Kills == 0 && !second.Activating) return Result("confirmed", roots.LocalPlayer, null, 0, "not_started", 0, "two_matching_empty_local_evolution_slots", 2, false);
-                if (second.Kills == 152 && second.Activating) return Result("confirmed", roots.LocalPlayer, null, 152, "completed", 0, "two_matching_completed_local_evolution_slots", 2, false);
+                if (second.Kills == TargetKills && second.Activating) return Result("confirmed", roots.LocalPlayer, null, TargetKills, "completed", 0, "two_matching_completed_local_evolution_slots", 2, false);
                 return Unknown("empty_evolution_slot_not_a_completed_reward");
             }
             return Result("confirmed", roots.LocalPlayer, second.Rawcode, second.Kills, second.Activating ? "activating" : "charging", 1,
@@ -78,10 +79,10 @@ static class GameStartingEvolution
                 if (Remember(checked(moduleBase + 0xD305E0)) != roots.Players) throw new ReadFailure("game_state_identity_mismatch");
                 var player = Ptr(Remember(checked(roots.Players + 0x58 + (uint)roots.LocalPlayer * 4)));
                 if (Read(checked(player + 0x30), 1)[0] != roots.LocalPlayer) throw new ReadFailure("local_player_identity_mismatch");
-                var handle = NamedArray("sh", 12); var kills = NamedArray("si", 9); var activating = NamedArray("sl", 13);
-                if (kills > 152 || activating > 1) throw new ReadFailure("evolution_progress_out_of_range");
+                var handle = NamedArray("uY", 12); var kills = NamedArray("uZ", 9); var activating = NamedArray("uc", 13);
+                if (kills > TargetKills || activating > 1) throw new ReadFailure("evolution_progress_out_of_range");
                 if (handle == 0) return new((int)kills, activating == 1, 0, null, proof.ToString());
-                if (activating == 0 && kills == 152 || activating == 1 && kills != 152) throw new ReadFailure("evolution_phase_inconsistent");
+                if (activating == 0 && kills == TargetKills || activating == 1 && kills != TargetKills) throw new ReadFailure("evolution_phase_inconsistent");
                 if (handle < 0x100000 || handle > 0x1FFFFF) throw new ReadFailure("invalid_evolution_unit_handle");
                 var handles = Ptr(Remember(checked(roots.Players + 0x1C))); var slots = Ptr(Remember(checked(handles + 0x19C)));
                 var reference = Ptr(Remember(checked(slots + (handle - 0x100000) * 12 + 4)));
@@ -127,8 +128,8 @@ static class GameStartingEvolution
                                 if (declared != expectedType || !GameProgression.GlobalValueTagMatches(expectedType, tag, value)) throw new ReadFailure("unexpected_evolution_global_type");
                                 proof.Append(node).Append(':').Append(Convert.ToHexString(bytes)).Append(';');
                                 // Native8D17B0 returns0 for a not-yet-allocated array;8CB9D0 also
-                                // returns0 for an index beyond its current allocation. sl stays lazy
-                                // until its first true assignment at152 kills.
+                                // returns0 for an index beyond its current allocation. uc stays lazy
+                                // until its first true assignment at the kill target.
                                 if (value == 0) found = 0;
                                 else
                                 {
@@ -159,8 +160,8 @@ static class GameStartingEvolution
     }
 
     private static State Result(string status, int? player, string? code, int? kills, string phase, int count, string reason, int samples, bool membership) =>
-        new(status, player, code, kills, 152, phase, count, new(true, "read_only_named_local_evolution_and_native_unit_reference", reason,
-            GameProgression.SupportedMapHash, GameProgression.ScriptHash, samples, ["sh", "si", "sl"], [1716, 1717, 1719, 56115, 56147, 56149, 56163, 56179, 56195, 56207, 56211, 57069, 57081],
+        new(status, player, code, kills, TargetKills, phase, count, new(true, "read_only_named_local_evolution_and_native_unit_reference", reason,
+            GameProgression.SupportedMapHash, GameProgression.ScriptHash, samples, ["uY", "uZ", "uc"], [1757, 1758, 1760, 57960, 57994, 58016, 58028, 58029, 58037, 58042, 58051, 58063],
             ["2368A0", "2217F4", "221813", "2B8490", "2B84A5", "07E090", "8D17B0", "8CB9D0"], 15, membership));
     private static bool Pointer(uint value) => value is >= 0x10000 and <= 0x7FFF0000;
     private static uint Ptr(uint value, [CallerArgumentExpression(nameof(value))] string stage = "") => Pointer(value) ? value : throw new ReadFailure("invalid_evolution_pointer") { Failure = new(stage, value) };

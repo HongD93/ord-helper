@@ -5,7 +5,7 @@
  "use strict";
  const list=x=>Array.isArray(x)?x:[],finite=x=>typeof x==="number"&&Number.isFinite(x),positive=x=>Number.isSafeInteger(x)&&x>0?x:0;
  const stockOf=x=>new Map(Array.from(x instanceof Map?x:Array.isArray(x)?x.map(r=>[r.rawcode,r.count]):Object.entries(x||{}),([raw,n])=>[raw,positive(n)]).filter(([,n])=>n>0)),dict=x=>Object.fromEntries(Array.from(x).filter(([,n])=>n>0));
- const selectedRole=x=>["stun","physical_shred","magic_shred"].includes(x)?x:"auto",roles=["stun","physical_shred","magic_shred"],enemy=new Set(["enemy","enemies","all_enemies","boss","boss_enemies","line_enemies"]),allies=new Set(["ally","allies","allied","all_allies","team"]);
+ const selectedRole=x=>["stun","physical_shred","magic_shred"].includes(x)?x:"auto",baseRoles=["stun","physical_shred","magic_shred"],roleKinds={physical_shred:["armorReduction"],magic_shred:["magicResistanceReduction"],slow:["slow"],mana_support:["manaRegeneration","manaRecovery","manaAmplification","manaCostReduction"],health_support:["healthRegeneration"],attack_speed:["attackSpeedBuff"],attack_damage:["attackDamageBuff"],damage_amplification:["magicAmplification","allDamageAmplification","explosionAmplification"]},roles=[...baseRoles,...Object.keys(roleKinds).filter(role=>!baseRoles.includes(role)),"support_damage"],roleForKind=kind=>Object.keys(roleKinds).find(role=>roleKinds[role].includes(kind))||null,enemy=new Set(["enemy","enemies","all_enemies","boss","boss_enemies","line_enemies"]),allies=new Set(["ally","allies","allied","all_allies","team"]);
  const temporary=new Set(["h076","h04T","h04Y","h05D","h0CA","h06O","h0C5"]),proxies=new Set(["h04S","H08T"]),tiers=new Set(["희귀","전설","히든","초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]),uppers=new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]),checked=new Set(["WOOD","GOLD","ITEM","UBAN","KING","IFCT","CHCT","SKPT","RMAX","NIKA"]);
  const clamp=(x,min,max,fallback)=>Number.isSafeInteger(x)?Math.max(min,Math.min(max,x)):fallback;
  function create(catalog,combat,options={}){
@@ -18,10 +18,11 @@
   let cached=null,session=null;
   const native=raw=>!temporary.has(raw)&&units.get(raw)?.playable===true&&units.get(raw)?.isSummon!==true&&units.get(raw)?.isSummoned!==true&&profiles[raw]?.verified===true&&profiles[raw]?.verificationKind==="native";
   const effects=raw=>native(raw)?list(profiles[raw].effects).filter(e=>Verifier.isRuntimeReferenceEligible(e)&&e.evidence&&["objectData","script","tooltip"].includes(e.evidence.type)&&e.isPenalty!==true&&(!finite(e.value)||e.value>0)):[];
-  const main=raw=>["physicalDps","magicDps","hybridDps"].includes(profiles[raw]?.damage?.reviewedAnchorRole)||["lineDamage","bossDamage","storyDamage"].some(kind=>curated[raw]?.[kind]?.assessment==="main");
+  const randomCodes=new Set([...list(combat?.acquisitionModel?.randomOnlyRawcodes),...list(catalog?.units).filter(unit=>unit.tier==="랜덤전용").map(unit=>unit.rawcode)]);
+  const main=raw=>!randomCodes.has(raw)&&(["physicalDps","magicDps","hybridDps"].includes(profiles[raw]?.damage?.reviewedAnchorRole)||["lineDamage","bossDamage","storyDamage"].some(kind=>curated[raw]?.[kind]?.assessment==="main"));
   const goals=stock=>Array.from(stock).filter(([,count])=>count>0).map(([rawcode,count])=>({rawcode,count}));
   function locksFor(stock,settings,context){const locks=stockOf(settings.protectedCounts),explicit=new Set(list(context?.activeCoreRawcodes));
-   for(const [raw,n]of stock)if(explicit.has(raw)||!proxies.has(raw)&&units.get(raw)?.playable===true&&uppers.has(units.get(raw).tier)||native(raw)&&main(raw))locks.set(raw,Math.max(locks.get(raw)||0,n));
+   for(const [raw,n]of stock)if(explicit.has(raw)||!proxies.has(raw)&&units.get(raw)?.playable===true&&uppers.has(units.get(raw).tier)||native(raw)&&(main(raw)||randomCodes.has(raw)))locks.set(raw,Math.max(locks.get(raw)||0,n));
    const required=stockOf(context?.requiredSupportCounts);for(const raw of list(context?.requiredSupportRawcodes))required.set(raw,Math.max(1,required.get(raw)||0));
    for(const [raw,n]of required)if((stock.get(raw)||0)>0)locks.set(raw,Math.max(locks.get(raw)||0,Math.min(stock.get(raw),n)));
    return locks;
@@ -37,13 +38,20 @@
    for(const scope of ["area"])for(const scenario of ["general"]){const left=before.control[scope],right=after.control[scope],field="generalOffered",newKnown=right.sources.some(s=>s.rawcode===code&&s.numericReferenceEligible&&s.branchAmbiguous!==true&&finite(s[field])&&s[field]>0);
     const a=left.sources.length?left.metrics[scenario].knownOfferedSecondsPerReferenceSecond:0,b=right.metrics[scenario].knownOfferedSecondsPerReferenceSecond,unknown=left.sources.filter(s=>!finite(s[field])||s.branchAmbiguous),preserved=unknown.every(s=>right.sources.some(t=>t.id===s.id&&t.count>=s.count)),knownBefore=a===null&&preserved?0:a;
     if(newKnown&&preserved&&finite(knownBefore)&&finite(b)&&b>knownBefore+1e-9)gains.push({role:"stun",metric:"stun|"+scope+"|"+scenario,before:a,after:b,knownContributionBefore:knownBefore,knownContributionAfter:b,baselineUnknownSourcesPreserved:unknown.length?preserved:null,comparisonBasis:unknown.length?"preserved_unknown_sources_plus_new_known_reference":"verified_reference_delta",delta:b-knownBefore,unit:"offered_seconds_per_reference_second",referenceOnly:true,actualCombinedUptime:null});}
-   for(const [metric,right]of Object.entries(after.utility)){const kind=metric.split("|")[0],role=kind==="armorReduction"?"physical_shred":kind==="magicResistanceReduction"?"magic_shred":null;if(!role)continue;
+   for(const [metric,right]of Object.entries(after.utility)){const kind=metric.split("|")[0],role=roleForKind(kind);if(!role)continue;
     const left=before.utility[metric],a=left?left.knownReferenceLowerBound:0,b=right.knownReferenceLowerBound,newKnown=right.sources.some(s=>s.rawcode===code&&s.numericReferenceEligible&&s.branchAmbiguous!==true&&finite(s.value)&&s.value>0),unknown=list(left?.sources).filter(s=>!finite(s.value)||s.branchAmbiguous),preserved=unknown.every(s=>right.sources.some(t=>t.id===s.id&&t.count>=s.count)),knownBefore=a;
     if(newKnown&&finite(knownBefore)&&finite(b)&&b>knownBefore+1e-9)gains.push({role,metric,before:a,after:b,knownContributionBefore:knownBefore,knownContributionAfter:b,baselineUnknownSourcesPreserved:unknown.length?preserved:null,delta:b-knownBefore,unit:metric.split("|").at(-1),conditional:metric.includes("|conditional|"),referenceOnly:true,actualStackedTotal:null});}
+   for(const source of damageSources(after).filter(source=>source.rawcode===code)){
+    const matches=summary=>damageSources(summary).filter(row=>row.metric===source.metric),a=sourceReference(matches(before),false),b=sourceReference(matches(after),false);
+    if(finite(source.value)&&finite(b)&&b>a+1e-9)gains.push({role:"support_damage",metric:source.metric,before:a,after:b,delta:b-a,referenceOnly:true,actualEffectiveDps:null});
+   }
    return gains;
   }
+  function damageSources(summary){return list(summary.damageSources).flatMap(unit=>list(unit.components).flatMap(component=>["referenceFlatDps","referenceMaxHealthFractionPerSecond","referenceCurrentHealthFractionPerSecond"].filter(field=>component.referenceAvailable&&finite(component[field])&&component[field]>0).map(field=>{
+   const target=component.target||"unknown",scope=component.scope||"unknown",metric=["support_damage",component.damageType||"unknown",component.attackType||"",target,scope,component.trigger?.kind||"unknown",field].join("|");return {id:unit.rawcode+":"+(component.abilityRawcode||"damage")+":"+field,rawcode:unit.rawcode,count:unit.count,kind:"support_damage",abilityRawcode:component.abilityRawcode||null,metric,value:component[field],numericReferenceEligible:true,branchAmbiguous:false,damageComponent:true,sameUnitCopiesStack:true,scope,target,targetExclusions:component.targetExclusions,range:finite(component.radius)?component.radius:null,mode:component.trigger?.kind||"unknown",continuous:false,conditions:list(component.conditions),unit:field};
+  })));}
   const effectFor=source=>list(profiles[source.rawcode]?.effects).find(e=>source.id===source.rawcode+":"+e.id)||list(profiles[source.rawcode]?.effects).find(e=>e.abilityRawcode===source.abilityRawcode&&e.kind===source.kind&&e.scope===source.scope&&e.mode===source.mode);
-  const rangeOf=source=>{const range=effectFor(source)?.range;return finite(range)&&range>=0?range:null;};
+  const rangeOf=source=>{const range=finite(source.range)?source.range:effectFor(source)?.range;return finite(range)&&range>=0?range:null;};
   function activationOf(source,stun){
    if(source.continuous)return "continuous";
    const effect=effectFor(source)||{},conditions=list(source.conditions).filter(text=>{
@@ -58,29 +66,32 @@
   function sourceReference(sources,stun){
    const known=sources.filter(s=>s.numericReferenceEligible===true&&!s.branchAmbiguous&&finite(stun?s.generalOffered:s.value));
    if(stun)return known.reduce((sum,s)=>sum+s.generalOffered*s.count,0);
+   if(known.length&&known.every(source=>source.damageComponent===true))return known.reduce((sum,source)=>sum+source.value*source.count,0);
    const values=known.map(s=>s.value),groups=new Map(),cross=new Map();
    for(const s of known){const value=s.value*(s.sameUnitCopiesStack?s.count:1);if(s.additiveVerified&&s.stackingGroup)groups.set(s.stackingGroup,(groups.get(s.stackingGroup)||0)+value);if(s.crossGroupAdditiveVerified){const key=s.stackingGroup||s.id;cross.set(key,s.additiveVerified?(cross.get(key)||0)+value:Math.max(cross.get(key)||0,value));}}
    return Math.max(0,...values,...groups.values(),...(cross.size?[Array.from(cross.values()).reduce((a,b)=>a+b,0)]:[]));
   }
   const sourcePartial=(sources,stun)=>sources.some(s=>!s.numericReferenceEligible||s.branchAmbiguous||!finite(stun?s.generalOffered:s.value)||!stun&&s.count>1&&!s.sameUnitCopiesStack);
-  function descriptorsFor(context){
+  function descriptorsFor(context,stock){
    const rows=list(context.targetGoals).filter(g=>units.has(g.rawcode)&&positive(g.count)),target=rows.length?adapter.assess(rows):null,descriptors=[];
+   const missingRandom=rows.filter(goal=>randomCodes.has(goal.rawcode)&&(stock.get(goal.rawcode)||0)<goal.count),missingCodes=new Set(missingRandom.map(goal=>goal.rawcode)),randomRoles=new Set();
    if(target){
-    const append=(role,baseMetric,sources,stun)=>{const groups=new Map();for(const s of sources.filter(s=>sourceActive(s,stun))){const activation=activationOf(s,stun),range=rangeOf(s),key=JSON.stringify([baseMetric,activation,range]);if(!groups.has(key))groups.set(key,{role,metric:key,baseMetric,activation,range,stun,sources:[]});groups.get(key).sources.push(s);}
+    const append=(role,baseMetric,sources,stun)=>{const groups=new Map();for(const s of sources.filter(s=>sourceActive(s,stun))){const activation=activationOf(s,stun),range=rangeOf(s),key=JSON.stringify([baseMetric,activation,range,s.target,s.targetExclusions]);if(!groups.has(key))groups.set(key,{role,metric:key,baseMetric,activation,range,stun,target:s.target,targetExclusions:s.targetExclusions,sources:[]});groups.get(key).sources.push(s);}
      // 같은 공격원을 목표별로 중복 충족시키지 않는다. 각 범위에서 전체 목표의 참조량을 함께 비교한다.
-     for(const group of groups.values())if(group.range!==null)group.sources=sources.filter(s=>sourceActive(s,stun)&&activationOf(s,stun)===group.activation&&rangeOf(s)!==null&&rangeOf(s)>=group.range);
+     for(const group of groups.values())if(group.range!==null)group.sources=sources.filter(s=>sourceActive(s,stun)&&activationOf(s,stun)===group.activation&&s.target===group.target&&Support.targetExclusionsPreserved(group,s)&&rangeOf(s)!==null&&rangeOf(s)>=group.range);
      descriptors.push(...groups.values());};
     append("stun","stun|area|general",target.control.area.sources,true);
-    for(const [metric,row]of Object.entries(target.utility)){const kind=metric.split("|")[0],role=kind==="armorReduction"?"physical_shred":kind==="magicResistanceReduction"?"magic_shred":kind==="slow"?"slow":null;if(role)append(role,metric,row.sources,false);}
-   }return {target,descriptors,hasTarget:list(context.targetGoals).length>0};
+    for(const [metric,row]of Object.entries(target.utility)){const kind=metric.split("|")[0],role=roleForKind(kind),random=row.sources.some(source=>missingCodes.has(source.rawcode));if(role&&(baseRoles.includes(role)||role==="slow"||random)){append(role,metric,row.sources,false);if(random)randomRoles.add(role);}}
+    const damage=damageSources(target);for(const metric of new Set(damage.filter(source=>missingCodes.has(source.rawcode)).map(source=>source.metric))){append("support_damage",metric,damage.filter(source=>source.metric===metric),false);randomRoles.add("support_damage");}
+   }return {target,descriptors,hasTarget:list(context.targetGoals).length>0,missingRandom,randomRoles:[...randomRoles]};
   }
   function assessNeeds(summary,stock,context,basis){
-   const allSources=(role,baseMetric)=>role==="stun"?summary.control.area.sources:Object.entries(summary.utility).filter(([metric])=>baseMetric?metric===baseMetric:metric.split("|")[0]===({physical_shred:"armorReduction",magic_shred:"magicResistanceReduction",slow:"slow"})[role]).flatMap(([,row])=>row.sources);
+   const allSources=(role,baseMetric)=>role==="stun"?summary.control.area.sources:role==="support_damage"?damageSources(summary).filter(source=>!baseMetric||source.metric===baseMetric):Object.entries(summary.utility).filter(([metric])=>baseMetric?metric===baseMetric:list(roleKinds[role]).includes(metric.split("|")[0])).flatMap(([,row])=>row.sources);
    const comparisons=[];
    if(basis.hasTarget)for(const descriptor of basis.descriptors){
-    const {role,metric,baseMetric,activation,range,stun,sources:required}=descriptor,all=allSources(role,baseMetric).filter(s=>sourceActive(s,stun)),sameActivation=all.filter(s=>activationOf(s,stun)===activation),comparable=sameActivation.filter(s=>range===null?required.some(t=>t.id===s.id):rangeOf(s)!==null&&rangeOf(s)>=range),identitySatisfied=sourceIdentity(required,all);
+    const {role,metric,baseMetric,activation,range,stun,sources:required}=descriptor,all=allSources(role,baseMetric).filter(s=>sourceActive(s,stun)),sameActivation=all.filter(s=>activationOf(s,stun)===activation),comparable=sameActivation.filter(s=>s.target===descriptor.target&&Support.targetExclusionsPreserved(descriptor,s)&&(range===null?required.some(t=>t.id===s.id):rangeOf(s)!==null&&rangeOf(s)>=range)),identitySatisfied=sourceIdentity(required,all);
     const targetKnownReference=sourceReference(required,stun),currentKnownReference=sourceReference(comparable,stun),targetPartial=sourcePartial(required,stun),actualPartial=sourcePartial(comparable,stun)||sameActivation.some(s=>rangeOf(s)===null),partial=targetPartial||actualPartial;
-    const targetRoleSources=role==="stun"?basis.target.control.area.sources:Object.entries(basis.target.utility).filter(([key])=>key===baseMetric).flatMap(([,row])=>row.sources);
+    const targetRoleSources=role==="stun"?basis.target.control.area.sources:role==="support_damage"?damageSources(basis.target).filter(source=>source.metric===baseMetric):Object.entries(basis.target.utility).filter(([key])=>key===baseMetric).flatMap(([,row])=>row.sources);
     const rolePresent=allSources(role).some(s=>sourceActive(s,stun)),unmatchedUnknown=required.filter(s=>sourcePartial([s],stun)).some(s=>!sourceIdentity([s],all)),unmatchedConditions=all.length>0&&sameActivation.length===0&&!all.every(s=>sourceIdentity([s],targetRoleSources)),unknownEnvelope=!stun&&sameActivation.some(s=>sourcePartial([s],false));
     let status="unknown",gap=null;
     if(identitySatisfied){status="satisfied_identity";gap=0;}
@@ -93,9 +104,9 @@
     const required=actual.length?["stun",...(modes.has("physical")||modes.has("hybrid")?["physical_shred"]:[]),...(modes.has("magic")||modes.has("hybrid")?["magic_shred"]:[])]:[];
     for(const role of required){const sources=allSources(role).filter(s=>sourceActive(s,role==="stun")),unknown=sourcePartial(sources,role==="stun");comparisons.push({role,metric:"role_presence|"+role,status:!sources.length?"missing_role":unknown?"unknown":"present_unquantified",gap:!sources.length?null:0,actualCurrent:null,actualGap:null,currentTotalReference:null,partial:unknown,identitySatisfied:false,currentKnownReference:sourceReference(sources,role==="stun"),targetKnownReference:null,comparisonBasis:"actual_main_minimum_role_presence",actualSufficiencyEstablished:false});}
    }
-   const actualModes=new Set(Array.from(stock).filter(([raw])=>native(raw)).map(([raw])=>({physicalDps:"physical",magicDps:"magic",hybridDps:"hybrid"})[profiles[raw]?.damage?.reviewedAnchorRole]).filter(Boolean)),mode=actualModes.has("hybrid")||actualModes.has("physical")&&actualModes.has("magic")?"hybrid":actualModes.size===1?[...actualModes][0]:context.mode;
-   const automaticRoles=mode==="physical"?["stun","physical_shred"]:mode==="magic"?["stun","magic_shred"]:roles;
-   return {basis:basis.hasTarget?"target_support_reference":"actual_main_minimum_role_presence",mode:mode||null,automaticRoles,targetBasis:context.targetBasis||null,comparisons:comparisons.filter(c=>c.role!=="slow"),slowComparisons:comparisons.filter(c=>c.role==="slow"),requestedRoles:automaticRoles.filter(role=>comparisons.some(c=>c.role===role&&["missing_role","known_reference_gap"].includes(c.status))),stunDerivedFromSlow:false,actualSufficiencyEstablished:false};
+   const actualModes=new Set(Array.from(stock).filter(([raw])=>native(raw)&&!randomCodes.has(raw)).map(([raw])=>({physicalDps:"physical",magicDps:"magic",hybridDps:"hybrid"})[profiles[raw]?.damage?.reviewedAnchorRole]).filter(Boolean)),mode=actualModes.has("hybrid")||actualModes.has("physical")&&actualModes.has("magic")?"hybrid":actualModes.size===1?[...actualModes][0]:context.mode;
+   const automaticRoles=[...new Set([...(mode==="physical"?["stun","physical_shred"]:mode==="magic"?["stun","magic_shred"]:baseRoles),...basis.randomRoles])];
+   return {basis:basis.hasTarget?"target_support_reference":"actual_main_minimum_role_presence",mode:mode||null,automaticRoles,targetBasis:context.targetBasis||null,comparisons:comparisons.filter(c=>c.role!=="slow"||basis.randomRoles.includes("slow")),slowComparisons:comparisons.filter(c=>c.role==="slow"),requestedRoles:automaticRoles.filter(role=>comparisons.some(c=>c.role===role&&["missing_role","known_reference_gap"].includes(c.status))),missingRandomSupport:basis.missingRandom,randomAcquisitionAssumed:false,stunDerivedFromSlow:false,actualSufficiencyEstablished:false};
   }
   function needResolution(before,after){const resolved=[];for(const need of before.comparisons){if(!before.requestedRoles.includes(need.role)||!["missing_role","known_reference_gap"].includes(need.status))continue;const next=after.comparisons.find(c=>c.role===need.role&&c.metric===need.metric);if(!next)continue;
     if(finite(need.gap)&&need.gap>0){const remaining=next.identitySatisfied?0:finite(next.gap)?next.gap:next.status==="unknown"?need.gap:Math.max(0,need.targetKnownReference-next.currentKnownReference),amount=Math.max(0,need.gap-remaining);if(amount>1e-9)resolved.push({role:need.role,metric:need.metric,kind:need.status,beforeGap:need.gap,afterGap:remaining,delta:amount,closedFraction:Math.min(1,amount/need.gap),relativeGap:need.targetKnownReference>0?Math.min(1,need.gap/need.targetKnownReference):1,conditional:need.baseMetric?.includes("|conditional|")===true,referenceOnly:true,actualSufficiencyEstablished:false});}
@@ -143,10 +154,11 @@
    if(settings.craftRunning===true)return cached?{...cached,selectedRole:role,craftRunning:true,candidates:cached.candidates.map(c=>({...c,ready:false})),craftTargets:cached.craftTargets.map(t=>({...t,available:false,ready:false,reason:"craft_running",expectedSteps:[],expectedStepCount:0}))}:{...empty(),craftRunning:true};
    const stock=stockOf(counts),locks=locksFor(stock,settings,context);if(locks.size>64){cached=empty();return cached;}
    const baselineGoals=goals(stock),baseline=adapter.assess(baselineGoals),explicit=list(settings.reinforcementCandidateRawcodes),candidateSet=explicit.length?new Set(explicit):null;
-   const targetBasis=descriptorsFor(context),needs=assessNeeds(baseline,stock,context,targetBasis),requested=role==="auto"?needs.requestedRoles:[role];
+   const targetBasis=descriptorsFor(context,stock),needs=assessNeeds(baseline,stock,context,targetBasis),requested=role==="auto"?needs.requestedRoles:[role];
    if(!requested.length){cached={...empty(),needs,protectedCounts:dict(locks),craftRunning:false};return cached;}
    const pool=new Map(roles.map(r=>[r,[]])),analyses=new Map(),rootStates=new Map(),previewResolutions=new Map(),supported=settings.supportedRecipeIds==null?null:new Set(settings.supportedRecipeIds);
-   for(const [raw,unit]of units){if(!includeMysteriousDecks&&unit.tier==="신비"||!native(raw)||proxies.has(raw)||!tiers.has(unit.tier)||(stock.get(raw)||0)>0||candidateSet&&!candidateSet.has(raw))continue;
+   for(const [raw,unit]of units){if(!includeMysteriousDecks&&unit.tier==="신비"||!native(raw)||proxies.has(raw)||!tiers.has(unit.tier)||(stock.get(raw)||0)>0||candidateSet&&!candidateSet.has(raw)||
+    options.requiredOwnedMaterialsAvailable?.([{rawcode:raw,count:1}],stock,locks)===false)continue;
     const roots=Array.from(recipes.values()).filter(r=>r.resultUnitRawcode===raw&&Graph.isProductionRecipe(r)&&supported?.has(String(r.id))).map(recipe=>({recipe,conditions:Graph.evaluateRecipeConditions(recipe.ingredients,settings.recipeConditions),items:Graph.evaluateItems(recipe.ingredients,settings.items)})).filter(row=>!row.conditions.blockedConditions.length&&!row.items.missingItems.some(i=>i.known&&i.missing>0));if(!roots.length)continue;
     rootStates.set(raw,roots.some(row=>row.conditions.conditionsReady&&row.items.itemsReady));
     const solo=adapter.assess([{rawcode:raw,count:1}]),none=adapter.assess([]),gains=deltas(none,solo,raw),eligible=roles.filter(r=>gains.some(g=>g.role===r));if(!eligible.length)continue;

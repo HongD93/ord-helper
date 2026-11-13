@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json.Serialization;
 
-// kL/kM은 현재 보유량이 아니라 e0IX의 누적 흔함 획득 이력이다.
+// mB/mC은 현재 보유량이 아니라 e0IX의 누적 흔함 획득 이력이다.
 // LoadInteger의 native 자료구조를 읽으며 게임 함수를 호출하거나 쓰지 않는다.
 static class GameRandomState
 {
@@ -61,7 +61,7 @@ static class GameRandomState
             }
             catch (ReadFailure error) when (error.Reason != "session_changed")
             {
-                // 해시테이블 이력 실패가 라운드나 별도로 두 번 확인한 kL까지 확정값으로 위조하지 않게 분리한다.
+                // 해시테이블 이력 실패가 라운드나 별도로 두 번 확인한 mB까지 확정값으로 위조하지 않게 분리한다.
                 var first = ReadSample(false); Session(); var second = ReadSample(false); Session();
                 if (!Equal(first, second)) return Unknown("random_history_scalars_changing");
                 return WithMismatch(Result("partial", roots.LocalPlayer, second.DrawCount, second.Interval, new(StringComparer.Ordinal),
@@ -126,14 +126,14 @@ static class GameRandomState
                     if (found is null) proof.Append("missing:").Append(name).Append(';');
                     return found;
                 }
-                var draws = Named("kL", 9)!; var interval = Named("sZ", 4, true);
-                // sZ는 지원 맵에서 재할당이 없는 constant integer 2다. compiler의 상수 인라인 생략을 허용한다.
+                var draws = Named("mB", 9)!; var interval = Named("uQ", 4, true);
+                // uQ는 지원 맵에서 재할당이 없는 constant integer 2다. compiler의 상수 인라인 생략을 허용한다.
                 var every = interval is null ? 2 : checked((int)interval.Value);
                 if (every != 2) throw new ReadFailure("correction_interval_disagrees_with_supported_map");
                 if (draws.Value > 1_000_000) throw new ReadFailure("random_history_out_of_range");
                 var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-                if (!withCounts) return new((int)draws.Value, every, interval is null ? "verified_map_constant_sZ" : "named_global_sZ", counts, proof.ToString());
-                var tableGlobal = Named("kM", 7)!;
+                if (!withCounts) return new((int)draws.Value, every, interval is null ? "verified_map_constant_uQ" : "named_global_uQ", counts, proof.ToString());
+                var tableGlobal = Named("mC", 7)!;
                 // D305E0는 GameState/플레이어 관리자다. roots.Table은 UI+3BC의 유닛 목록이므로 서로 다르다.
                 if (Remember(checked(moduleBase + 0xD305E0)) != roots.Players) throw new ReadFailure("game_state_identity_mismatch");
                 var handle = tableGlobal.Value;
@@ -166,7 +166,7 @@ static class GameRandomState
                     if (value > 1_000_000) throw new ReadFailure("random_history_out_of_range");
                     counts.Add(rawcode, (int)value);
                 }
-                return new((int)draws.Value, every, interval is null ? "verified_map_constant_sZ" : "named_global_sZ", counts, proof.ToString());
+                return new((int)draws.Value, every, interval is null ? "verified_map_constant_uQ" : "named_global_uQ", counts, proof.ToString());
 
                 uint Lookup(uint table, uint key, uint maskOffset, uint bucketOffset, uint firstKeyOffset, uint secondKeyOffset, bool emptyAllowed)
                 {
@@ -209,7 +209,7 @@ static class GameRandomState
     private static uint Next(uint node, int step) { var address = (long)node + step + 4; if (address < 0x10000 || address > 0x7FFF0000) throw new ReadFailure("invalid_random_history_next"); return (uint)address; }
     private static State Result(string status, int? player, int? draws, int? interval, Dictionary<string, int> counts, string reason, int samples, string intervalSource) =>
         new(status, player, draws, interval, counts, new(true, "read_only_named_globals_and_native_LoadInteger_layout", reason,
-            GameProgression.SupportedMapHash, samples, intervalSource, [14, 209, 3181, 3182, 3183, 4497, 4502, 4521, 4525, 49078]));
+            GameProgression.SupportedMapHash, samples, intervalSource, [14, 15, 193, 3362, 3363, 3364, 4706, 4710, 50875, 50879, 50887]));
     internal static (uint Rva, byte[] Bytes)[] NativeSignatures(uint moduleBase) => [
         (0x240955, [0x8B, 0x0D, .. BitConverter.GetBytes(checked(moduleBase + 0xD305E0))]),
         (0x240968, [0xFF, 0x76, 0x24, 0xE8, 0x90, 0x51, 0x02, 0]),

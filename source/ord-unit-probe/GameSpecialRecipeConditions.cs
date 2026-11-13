@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-// 같은 맵의 증가형 목재·변화 횟수·특성 포인트·라운드를 읽기만 한다.
+// 2.331[C]의 증가형 목재·변화 횟수·특성 포인트·라운드·니카 강화 상태를 읽기만 한다.
 static class GameSpecialRecipeConditions
 {
     internal sealed record State(
@@ -25,7 +25,7 @@ static class GameSpecialRecipeConditions
         [property: JsonPropertyName("stage")] int? Stage,
         [property: JsonPropertyName("source")] Evidence Source);
     private static NikaState UnknownNika(int? owner, string reason) => new("unknown", owner, null,
-        new(true, GameProgression.SupportedMapHash, 0, "two_matching_named_NG_integer_array_reads", reason));
+        new(true, GameProgression.SupportedMapHash, 0, "two_matching_named_Nt_integer_array_reads", reason));
     internal sealed record Evidence(
         [property: JsonPropertyName("readOnly")] bool ReadOnly,
         [property: JsonPropertyName("mapSha256")] string MapSha256,
@@ -62,15 +62,15 @@ static class GameSpecialRecipeConditions
                 var a = first.Values[name]; var b = second.Values[name];
                 return a is not null && a == b && a.Value <= maximum ? checked((int)a.Value) : null;
             }
-            var increment = Value("LW", 1000); if (increment != 5) increment = null; // 초기화 후 이 맵에서 LW의 유일 대입은5다.
-            var surcharge = increment is null ? null : Value("hW", GameResources.MaximumSupportedAmount);
-            var changes = Value("LO", GameResources.MaximumSupportedAmount); var round = Value("X3", 65);
+            var increment = Value("Lm", 1000); if (increment != 5) increment = null; // 2.331[C] 초기화에서 Lm은 5로 설정된다.
+            var surcharge = increment is null ? null : Value("i6", GameResources.MaximumSupportedAmount);
+            var changes = Value("Le", GameResources.MaximumSupportedAmount); var round = Value("Y3", 65);
             var skills = GameResources.CaptureSkillPointsForTests(read, readRoots, roots, moduleBase, version);
             Session();
-            var nika = nikaLayout ? Value("NG", 2) : null;
+            var nika = nikaLayout ? Value("Nt", 2) : null;
             return Result(roots.LocalPlayer, surcharge, increment, changes, skills, round, "matching_fields_only_unknown_is_not_zero", 2) with
             { NikaEnhancement = nika is { } stage ? new("confirmed", roots.LocalPlayer, stage,
-                new(true, GameProgression.SupportedMapHash, 2, "two_matching_named_NG_integer_array_reads", "NG_0_unenhanced_1_enhanced_2_nika_completed")) : UnknownNika(roots.LocalPlayer, "NG_not_confirmed") };
+                new(true, GameProgression.SupportedMapHash, 2, "two_matching_named_Nt_integer_array_reads", "Nt_0_unenhanced_1_enhanced_2_nika_completed")) : UnknownNika(roots.LocalPlayer, "Nt_not_confirmed") };
 
             Sample Take()
             {
@@ -82,9 +82,9 @@ static class GameSpecialRecipeConditions
                 var player = Ptr(U32(checked(roots.Players + 0x58 + (uint)roots.LocalPlayer * 4)));
                 if (Read(checked(player + 0x30), 1)[0] != roots.LocalPlayer) throw new IOException("Player identity changed.");
                 var values = new Dictionary<string, Entry?>(StringComparer.Ordinal);
-                foreach (var name in new[] { "hW", "LW", "LO", "X3", "NG" })
+                foreach (var name in new[] { "i6", "Lm", "Le", "Y3", "Nt" })
                 {
-                    if(name=="NG"&&!nikaLayout){values[name]=null;continue;}
+                    if (name == "Nt" && !nikaLayout) { values[name] = null; continue; }
                     try { values[name] = Named(name); }
                     catch (Exception error) when (error is IOException or Win32Exception or OverflowException) { values[name] = null; }
                 }
@@ -106,16 +106,16 @@ static class GameSpecialRecipeConditions
                                 if (found is not null) throw new IOException("Duplicate special global.");
                                 var type = BitConverter.ToUInt32(bytes, 0x1C); var array = BitConverter.ToUInt32(bytes, 0x18); var value = BitConverter.ToUInt32(bytes, 0x20);
                                 uint header = 0, data = 0;
-                                if (name != "X3")
+                                if (name != "Y3")
                                 {
                                     if (type != 9 || array != 9) throw new IOException("Unexpected integer array.");
-                                    // NG는 첫 강화 전 lazy0일 수 있다. getter8D17B0/8CB9D0의 기본0 경로를 별도 검증했다.
-                                    if (name == "NG" && value == 0) value = 0;
-                                    else
+                                    // Nt와 i6 정수 배열의 미할당 항목은 0이다. 전역 부재·형식 오류는 미확인으로 둔다.
+                                    var defaultZeroArray = name is "Nt" or "i6";
+                                    if (!(defaultZeroArray && value == 0))
                                     {
                                         header = Ptr(value); var size = U32(checked(header + 8));
-                                        if (size > 8192 || name != "NG" && size <= roots.LocalPlayer) throw new IOException("Invalid integer array.");
-                                        if (name == "NG" && size <= roots.LocalPlayer) value = 0;
+                                        if (size > 8192 || !defaultZeroArray && size <= roots.LocalPlayer) throw new IOException("Invalid integer array.");
+                                        if (defaultZeroArray && size <= roots.LocalPlayer) value = 0;
                                         else { data = Ptr(U32(checked(header + 12))); value = U32(checked(data + (uint)roots.LocalPlayer * 4)); }
                                     }
                                 }
@@ -149,7 +149,7 @@ static class GameSpecialRecipeConditions
             Int(nika, "localPlayer") == owner && Int(nika, "stage") is >= 0 and <= 2 && nika.TryGetProperty("source", out var evidence) &&
             evidence.ValueKind == JsonValueKind.Object && evidence.TryGetProperty("readOnly", out var ro) && ro.ValueKind == JsonValueKind.True &&
             Text(evidence, "mapSha256") == GameProgression.SupportedMapHash && Int(evidence, "sampleCount") is >= 2)
-            result = result with { NikaEnhancement = new("confirmed", owner, Int(nika, "stage"), new(true, GameProgression.SupportedMapHash, 2, "validated_snapshot_NG", "matching_confirmed_NG")) };
+            result = result with { NikaEnhancement = new("confirmed", owner, Int(nika, "stage"), new(true, GameProgression.SupportedMapHash, 2, "validated_snapshot_Nt", "matching_confirmed_Nt")) };
         return result;
     }
     internal static bool ConsumptionMatches(JsonElement before, JsonElement after, IEnumerable<CraftRecipeCondition> requirements)

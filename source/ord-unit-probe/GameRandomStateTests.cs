@@ -65,9 +65,9 @@ static class GameRandomStateTests
     }
     private static void InlineConstant()
     {
-        var f = new Fixture(); f.RemoveGlobal("sZ"); var value = f.Capture();
-        Check(value.Status == "confirmed" && value.CorrectionInterval == 2 && value.Source.CorrectionIntervalSource == "verified_map_constant_sZ", "a missing inlined immutable map constant is not guessed from current counts");
-        f = new Fixture(); f.Value("sZ", 3); Unknown(f.Capture());
+        var f = new Fixture(); f.RemoveGlobal("uQ"); var value = f.Capture();
+        Check(value.Status == "confirmed" && value.CorrectionInterval == 2 && value.Source.CorrectionIntervalSource == "verified_map_constant_uQ", "a missing inlined immutable map constant is not guessed from current counts");
+        f = new Fixture(); f.Value("uQ", 3); Unknown(f.Capture());
     }
     private static void Unsupported()
     {
@@ -106,17 +106,17 @@ static class GameRandomStateTests
     }
     private static void Partial()
     {
-        var f = new Fixture(); f.Value("kM", 1); var value = f.Capture();
+        var f = new Fixture(); f.Value("mC", 1); var value = f.Capture();
         Check(value.Status == "partial" && value.DrawCount == 6 && value.CorrectionInterval == 2 && value.CommonAcquiredCounts.Count == 0 && value.Source.SampleCount == 2,
-            "history table failure does not fabricate category counts or destroy independently read kL");
-        f.Write(f.Nodes["kM"] + 0x1C, 4); Check(f.Capture().Status == "partial", "hashtable global must have handle type");
+            "history table failure does not fabricate category counts or destroy independently read mB");
+        f.Write(f.Nodes["mC"] + 0x1C, 4); Check(f.Capture().Status == "partial", "hashtable global must have handle type");
     }
     private static void Agents()
     {
         foreach (var mutation in new Action<Fixture>[] {
             f => f.Write(Fixture.Agent + 0x18, 99), f => f.Write(Fixture.Agent + 0x20, 1),
             f => f.Write(Fixture.Agent + 0x0C, 0), f => f.Write(Fixture.AgentSlots + 8, 0),
-            f => f.Write(Fixture.Reference + 0x24, 0), f => f.Value("kM", 0xFFFFFFF)
+            f => f.Write(Fixture.Reference + 0x24, 0), f => f.Value("mC", 0xFFFFFFF)
         }) { var f = new Fixture(); mutation(f); var state = f.Capture(); Check(state.Status == "partial" && state.CommonAcquiredCounts.Count == 0, "invalid or reused hashtable handles cannot expose history"); }
     }
     private static void Hashes()
@@ -127,35 +127,35 @@ static class GameRandomStateTests
     }
     private static void Globals()
     {
-        var f = new Fixture(); f.Write(f.Nodes["kL"] + 0x1C, 4); Unknown(f.Capture());
-        f = new Fixture(); f.RemoveGlobal("kL"); Unknown(f.Capture());
+        var f = new Fixture(); f.Write(f.Nodes["mB"] + 0x1C, 4); Unknown(f.Capture());
+        f = new Fixture(); f.RemoveGlobal("mB"); Unknown(f.Capture());
         f = new Fixture(); f.Write(Fixture.ArrayHeader + 8, 0); Unknown(f.Capture());
         f = new Fixture(); f.Write(Fixture.Globals + 0x24, 2); Unknown(f.Capture());
     }
     private static void TypeDiagnostics()
     {
-        var f = new Fixture(); f.Write(f.Nodes["kL"] + 0x1C, 13); var value = f.Capture(); Unknown(value);
-        Check(value.Source.TypeMismatch is { Name: "kL", ExpectedType: 9, ActualType: 13, ActualValueTypeTag: 9 } && value.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 9 }), "counter type errors keep the name and observed native metadata");
-        f = new Fixture(); f.Write(f.Nodes["kM"] + 0x1C, 4); value = f.Capture();
+        var f = new Fixture(); f.Write(f.Nodes["mB"] + 0x1C, 13); var value = f.Capture(); Unknown(value);
+        Check(value.Source.TypeMismatch is { Name: "mB", ExpectedType: 9, ActualType: 13, ActualValueTypeTag: 9 } && value.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 9 }), "counter type errors keep the name and observed native metadata");
+        f = new Fixture(); f.Write(f.Nodes["mC"] + 0x1C, 4); value = f.Capture();
         Check(value.Status == "partial" && value.DrawCount == 6 && value.CommonAcquiredCounts.Count == 0 &&
-            value.Source.TypeMismatch is { Name: "kM", ExpectedType: 7, ActualType: 4, ActualValueTypeTag: 7 } && value.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 0, 7 }), "a table-only mismatch keeps separately checked scalars and the original diagnostic");
+            value.Source.TypeMismatch is { Name: "mC", ExpectedType: 7, ActualType: 4, ActualValueTypeTag: 7 } && value.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 0, 7 }), "a table-only mismatch keeps separately checked scalars and the original diagnostic");
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(value));
-        Check(json.RootElement.GetProperty("source").GetProperty("globalTypeMismatch").GetProperty("name").GetString() == "kM", "the partial diagnostic is serialized for later live investigation");
+        Check(json.RootElement.GetProperty("source").GetProperty("globalTypeMismatch").GetProperty("name").GetString() == "mC", "the partial diagnostic is serialized for later live investigation");
         Check(new Fixture().Capture().Source.TypeMismatch is null, "diagnostics are capture-local");
     }
     private static void ScalarValueTags()
     {
-        var f = new Fixture(); f.Write(f.Nodes["sZ"] + 0x18, 4); f.Write(f.Nodes["kM"] + 0x18, 7);
+        var f = new Fixture(); f.Write(f.Nodes["uQ"] + 0x18, 4); f.Write(f.Nodes["mC"] + 0x18, 7);
         Check(f.Capture().Status == "confirmed", "live assigned integer and handle tags are native declared types");
-        f.Write(f.Nodes["sZ"] + 0x18, 0); Unknown(f.Capture());
-        f = new Fixture(); f.Write(f.Nodes["kM"] + 0x18, 8); var value = f.Capture();
-        Check(value.Status == "partial" && value.Source.TypeMismatch?.Name == "kM", "another scalar type is never accepted as a hashtable handle");
+        f.Write(f.Nodes["uQ"] + 0x18, 0); Unknown(f.Capture());
+        f = new Fixture(); f.Write(f.Nodes["mC"] + 0x18, 8); var value = f.Capture();
+        Check(value.Status == "partial" && value.Source.TypeMismatch?.Name == "mC", "another scalar type is never accepted as a hashtable handle");
         f = new Fixture(); f.Bytes[Fixture.Base + 0x8CB01A] = 0; Unknown(f.Capture());
     }
     private static void Names()
     {
-        var f = new Fixture(); f.AddGlobal("Kl", 9, Fixture.ArrayHeader); Check(f.Capture().Status == "confirmed", "hash collision does not ignore exact name case");
-        f = new Fixture(); f.AddGlobal("kL", 9, Fixture.ArrayHeader); Unknown(f.Capture());
+        var f = new Fixture(); f.AddGlobal("Mb", 9, Fixture.ArrayHeader); Check(f.Capture().Status == "confirmed", "hash collision does not ignore exact name case");
+        f = new Fixture(); f.AddGlobal("mB", 9, Fixture.ArrayHeader); Unknown(f.Capture());
     }
     private static void Totals() { var f = new Fixture(); f.Draws(7); Unknown(f.Capture()); }
     private static void Bounds()
@@ -174,7 +174,7 @@ static class GameRandomStateTests
         var a = new Fixture(); Check(a.Capture().DrawCount == 6, "first state");
         var b = new Fixture(1); b.Draws(0); b.Write(b.ParentBucket + 8, 0); var state = b.Capture();
         Check(state.Status == "confirmed" && state.LocalPlayer == 1 && state.DrawCount == 0, "second player has a separate parent-key history");
-        a.Value("kM", 1); Check(a.Capture().Status == "partial", "valid prior counts are never cached over a failed observation");
+        a.Value("mC", 1); Check(a.Capture().Status == "partial", "valid prior counts are never cached over a failed observation");
     }
     private static void Serialization()
     {
@@ -206,7 +206,7 @@ static class GameRandomStateTests
             Fill(Globals, 0x28); Write(Globals + 0x1C, Buckets); Write(Globals + 0x24, 63); InitBuckets(Buckets, 64);
             Write(Roots.Players + 0x58 + (uint)player * 4, Player); Bytes[Player + 0x30] = (byte)player;
             Fill(ArrayHeader, 16); Write(ArrayHeader + 8, 4); Write(ArrayHeader + 12, ArrayData); for (uint i = 0; i < 4; i++) Write(ArrayData + i * 4, 0);
-            Draws(6); AddGlobal("kL", 9, ArrayHeader); AddGlobal("sZ", 4, 2); AddGlobal("kM", 7, 0x10000A);
+            Draws(6); AddGlobal("mB", 9, ArrayHeader); AddGlobal("uQ", 4, 2); AddGlobal("mC", 7, 0x10000A);
             Write(Base + 0xD305E0, Roots.Players); Write(Roots.Players + 0x1C, Handles); Write(Handles + 0x19C, JassSlots);
             Write(JassSlots + 10 * 12 + 4, Reference); Write(Reference + 0x0C, 1); Write(Reference + 0x10, 17);
             Write(Reference + 0x24, 5);
@@ -229,7 +229,7 @@ static class GameRandomStateTests
         }
         internal void RemoveGlobal(string name)
         {
-            // 테스트에서 제거하는 kL/sZ는 원래 bucket의 유일한 항목이다.
+            // 테스트에서 제거하는 mB/uQ는 원래 bucket의 유일한 항목이다.
             Write(GlobalBucket(name) + 8, 0);
         }
         internal void AddChild(string name, uint value)

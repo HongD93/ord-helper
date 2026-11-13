@@ -84,7 +84,7 @@ static class NikaMaterialChoiceTests
             .Concat(command.WoodCost > 0 ? [new Dictionary<string, object?> { ["type"] = "WOOD", ["rawcode"] = "WOOD", ["count"] = command.WoodCost }] : []) });
         var jsonOptions = new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
         File.WriteAllText(catalog, JsonSerializer.Serialize(new { map = new { sha256 = GameProgression.SupportedMapHash }, units = allCodes.Select(rawcode => new { rawcode, playable = true }), recipes }, jsonOptions));
-        File.WriteAllText(aliases, JsonSerializer.Serialize(new { recipes = commands.Select(command => new { recipeId = command.RecipeId, command = command.ChatCommand }) }));
+        File.WriteAllText(aliases, JsonSerializer.Serialize(new { mapSha256 = GameProgression.SupportedMapHash, recipes = commands.Select(command => new { recipeId = command.RecipeId, command = command.ChatCommand }) }));
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] }); builder.Logging.ClearProviders(); await using var app = builder.Build();
         try
         {

@@ -19,7 +19,7 @@ static class GameCraftConditionSequenceTests
             File.WriteAllText(catalog, JsonSerializer.Serialize(new { map = new { sha256 = new string('a', 64) },
                 units = new[] { "b001", "m001", "g001" }.Select(rawcode => new { rawcode, playable = true }),
                 recipes = new[] { Recipe("r001", "m001", "b001"), Recipe("r002", "g001", "m001") } }));
-            File.WriteAllText(aliases, JsonSerializer.Serialize(new { recipes = new[] { "r001", "r002" }.Select(recipeId => new { recipeId, command = "조건조합" }) }));
+            File.WriteAllText(aliases, JsonSerializer.Serialize(new { mapSha256 = new string('a', 64), recipes = new[] { "r001", "r002" }.Select(recipeId => new { recipeId, command = "조건조합" }) }));
             async Task<JsonElement> Run(Fixture f) => await new GameCraftService(f.Snapshot, catalog, aliases, f.Execute)
                 .RunFixtureAsync("r002", 1, CancellationToken.None, app, adaptive: true);
             var passed = 0;

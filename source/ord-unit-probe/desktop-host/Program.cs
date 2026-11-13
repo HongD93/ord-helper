@@ -40,8 +40,13 @@ internal static class Program
             Directory.CreateDirectory(profile);
             using var window = new HelperWindow(profile, recipe, output);
             Application.Run(window);
-            // 새로 시작한 서버만 화면 시작 실패 때 정리한다. 정상 창 종료는 진행 중인 조합에 영향을 주지 않는다.
+            // 새로 시작한 서버만 종료한다. 진행 중 조합은 현재 단계를 정리한 뒤 서버가 스스로 종료한다.
             if (!window.StartupSucceeded) startedServer?.Stop();
+            else if (startedServer is not null && !PortableStartup.RequestGracefulShutdownAsync(startedServer).GetAwaiter().GetResult())
+            {
+                startedServer.Stop();
+                PortableStartup.WriteStartupFailure(layout!.Root, new InvalidOperationException("정상 종료 요청에 응답하지 않아 도우미가 시작한 수집기를 정지했습니다."));
+            }
         }
         catch (Exception error)
         {

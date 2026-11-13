@@ -14,6 +14,8 @@ internal sealed class HelperWindow : Form
     private const string SupportedGameVersion = "1.28.5.7680";
     private readonly string profilePath;
     private readonly WebView2 browser = new() { Dock = DockStyle.Fill, AllowExternalDrop = false };
+    private readonly RecommendationOverlay overlay = new();
+    private readonly CraftUiTrace craftUiTrace = new(Path.Combine(AppContext.BaseDirectory, "logs"));
     private readonly HttpClient client = new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
     {
         BaseAddress = new Uri(StartUrl), Timeout = TimeSpan.FromSeconds(2)
@@ -24,6 +26,10 @@ internal sealed class HelperWindow : Form
     private bool focusInProgress;
     private string? focusedRequestId;
     private IntPtr focusedGameWindow;
+    private bool focusedFromOverlay;
+    private string? pendingOverlayActionId;
+    private int pendingOverlayProcessId;
+    private DateTimeOffset pendingOverlayActionAt;
     private readonly string? verificationRecipe;
     private readonly string? verificationOutput;
     private bool verificationStarted;
@@ -42,9 +48,10 @@ internal sealed class HelperWindow : Form
         TopMost = true;
         Activated += (_, _) => { if (GetForegroundWindow() == Handle) TopMost = false; };
         Controls.Add(browser);
+        overlay.ActionRequested += OnOverlayActionRequested;
         Shown += InitializeAsync;
         FormClosing += (_, _) => closing.Cancel();
-        FormClosed += (_, _) => { client.Dispose(); closing.Dispose(); };
+        FormClosed += (_, _) => { overlay.Dispose(); client.Dispose(); closing.Dispose(); };
     }
 
     private async void InitializeAsync(object? sender, EventArgs args)
@@ -72,7 +79,12 @@ internal sealed class HelperWindow : Form
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.AreBrowserAcceleratorKeysEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
-            core.NavigationStarting += (_, navigation) => navigation.Cancel = !AllowedOrigin(navigation.Uri);
+            core.NavigationStarting += (_, navigation) =>
+            {
+                navigation.Cancel = !AllowedOrigin(navigation.Uri);
+                if (!navigation.Cancel) overlay.Clear();
+            };
+            core.ProcessFailed += (_, _) => overlay.Clear();
             core.FrameNavigationStarting += (_, navigation) => navigation.Cancel = !AllowedOrigin(navigation.Uri);
             core.NewWindowRequested += (_, request) => request.Handled = true;
             core.DownloadStarting += (_, download) => download.Cancel = true;
@@ -128,17 +140,42 @@ internal sealed class HelperWindow : Form
             using var document = JsonDocument.Parse(json);
             var request = document.RootElement;
             if (request.ValueKind != JsonValueKind.Object) return;
+            if (TextValue(request, "type") == "craft-ui-state")
+            {
+                if (!closing.IsCancellationRequested) craftUiTrace.TryWrite(request);
+                return;
+            }
+            if (TextValue(request, "type") == "recommendation-overlay")
+            {
+                if (!closing.IsCancellationRequested && verificationRecipe is null)
+                {
+                    if (request.TryGetProperty("processId", out var pid) && pid.ValueKind == JsonValueKind.Number &&
+                        pid.TryGetInt32(out var gamePid) && request.TryGetProperty("timestamp", out var timestamp) &&
+                        timestamp.ValueKind == JsonValueKind.String && timestamp.TryGetDateTimeOffset(out var observedAt) &&
+                        TextValue(request, "title") is { } title && TextValue(request, "detail") is { } detail)
+                    {
+                        double? percent = request.TryGetProperty("percent", out var progress) && progress.ValueKind == JsonValueKind.Number &&
+                            progress.TryGetDouble(out var value) ? value : null;
+                        overlay.UpdateRecommendation(gamePid, observedAt, title, detail, percent,
+                            TextValue(request, "action"), TextValue(request, "actionId"));
+                    }
+                    else overlay.Clear();
+                }
+                return;
+            }
             requestId = TextValue(request, "requestId");
             if (!Guid.TryParseExact(requestId, "D", out _)) return;
             if (TextValue(request, "type") == "craft-finished")
             {
                 if (requestId != focusedRequestId) return;
                 var previousGame = focusedGameWindow;
+                var stayInGame = focusedFromOverlay;
                 focusedRequestId = null;
                 focusedGameWindow = IntPtr.Zero;
+                focusedFromOverlay = false;
                 // 추적을 정리하고, 조합 완료 또는 현재 단계 확인 후 중지했을 때 도우미로 복귀한다.
                 // 사용자가 다른 앱으로 전환했다면 창을 가져오지 않는다.
-                if (TextValue(request, "outcome") is not ("succeeded" or "stopped") ||
+                if (stayInGame || TextValue(request, "outcome") is not ("succeeded" or "stopped") ||
                     previousGame == IntPtr.Zero || GetForegroundWindow() != previousGame) return;
                 TopMost = true;
                 BringToFront();
@@ -151,8 +188,22 @@ internal sealed class HelperWindow : Form
                 Reply(requestId!, false, "게임 연결 정보를 확인하지 못했습니다.");
                 return;
             }
+            var overlayActionId = TextValue(request, "overlayActionId");
+            var fromOverlay = overlayActionId is not null;
+            if (fromOverlay)
+            {
+                var age = DateTimeOffset.UtcNow - pendingOverlayActionAt;
+                if (overlayActionId != pendingOverlayActionId || processId != pendingOverlayProcessId ||
+                    age < TimeSpan.Zero || age > TimeSpan.FromSeconds(3) || !overlay.IsGameForeground(processId))
+                {
+                    Reply(requestId!, false, "추천이 바뀌었습니다. 오버레이에서 다시 눌러 주세요.");
+                    return;
+                }
+                pendingOverlayActionId = null;
+            }
+            var expectedForeground = fromOverlay ? GetForegroundWindow() : Handle;
             // 이 창에서 사용자가 조작한 요청만 정상적인 Windows 전면 전환을 시도한다.
-            if (GetForegroundWindow() != Handle)
+            if (GetForegroundWindow() != expectedForeground)
             {
                 Reply(requestId!, false, "도우미 창을 선택한 뒤 다시 눌러 주세요.");
                 return;
@@ -201,7 +252,7 @@ internal sealed class HelperWindow : Form
                 return;
             }
             budget.Token.ThrowIfCancellationRequested();
-            if (GetForegroundWindow() != Handle || !SameServerProcess())
+            if (GetForegroundWindow() != expectedForeground || fromOverlay && window != expectedForeground || !SameServerProcess())
             {
                 Reply(requestId!, false, "화면이 바뀌어 게임 창으로 전환하지 않았습니다.");
                 return;
@@ -211,7 +262,7 @@ internal sealed class HelperWindow : Form
             var releaseWatch = Stopwatch.StartNew();
             while (MouseOrModifiersHeld() && releaseWatch.ElapsedMilliseconds < 500)
                 await Task.Delay(25, budget.Token);
-            if (GetForegroundWindow() != Handle) { Reply(requestId!, false, "화면이 바뀌어 게임 창으로 전환하지 않았습니다."); return; }
+            if (GetForegroundWindow() != expectedForeground) { Reply(requestId!, false, "화면이 바뀌어 게임 창으로 전환하지 않았습니다."); return; }
             if (!ParkCursorBeforeFocus(window))
             {
                 Reply(requestId!, false, "마우스 버튼을 놓은 뒤 다시 눌러 주세요.");
@@ -228,6 +279,7 @@ internal sealed class HelperWindow : Form
                     if (GetForegroundWindow() != window) break;
                     focusedRequestId = requestId;
                     focusedGameWindow = window;
+                    focusedFromOverlay = fromOverlay;
                     Reply(requestId!, true, "");
                     return;
                 }
@@ -245,6 +297,20 @@ internal sealed class HelperWindow : Form
             if (requestId is not null) Reply(requestId, false, "게임 창을 확인하지 못했습니다. 연결 상태를 확인해 주세요.");
         }
         finally { if (ownsPendingRequest) focusInProgress = false; }
+    }
+
+    private void OnOverlayActionRequested(string action, string actionId, int processId)
+    {
+        if (closing.IsCancellationRequested || browser.CoreWebView2 is not { } core ||
+            !AllowedOrigin(core.Source) || !overlay.IsGameForeground(processId)) return;
+        if (action == "craft")
+        {
+            if (focusInProgress || focusedRequestId is not null) return;
+            pendingOverlayActionId = actionId;
+            pendingOverlayProcessId = processId;
+            pendingOverlayActionAt = DateTimeOffset.UtcNow;
+        }
+        core.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "recommendation-overlay-action", actionId }));
     }
 
     private bool SameServerProcess()
@@ -304,7 +370,7 @@ internal sealed class HelperWindow : Form
     private static string? TextValue(JsonElement root, string name) => root.TryGetProperty(name, out var value) &&
         value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static bool TrueValue(JsonElement root, string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.True;
-    private static bool GameProcessName(string name) => name.Equals("War3", StringComparison.OrdinalIgnoreCase) ||
+    internal static bool GameProcessName(string name) => name.Equals("War3", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Warcraft III", StringComparison.OrdinalIgnoreCase);
     private static uint WindowProcess(IntPtr window) { GetWindowThreadProcessId(window, out var processId); return processId; }
     private static bool ParkCursorBeforeFocus(IntPtr window)
