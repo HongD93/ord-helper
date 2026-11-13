@@ -6,6 +6,24 @@
   "use strict";
   const finite=x=>typeof x==="number"&&Number.isFinite(x);
   const unique=xs=>Array.from(new Set(xs.filter(Boolean)));
+  const rareRayleigh="h05X";
+  const classic2331Hash="20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+  // 2.331[C]에서 레일리를 소모하는 생산 경로. 상위 결과부터 실제 보유량을 차감한다.
+  const rayleighPaths=[
+    ["H0B5","h03A"],["h049","h03A"],["h05C","h047"],["h09W","h07L"],
+    ["h03A",rareRayleigh],["h08S",rareRayleigh],["h07L",rareRayleigh],
+    ["h047",rareRayleigh],["h067",rareRayleigh]
+  ];
+  function rayleighAvailable(goals,stock,protectedCounts){
+    const required=new Map();
+    for(const goal of goals)required.set(goal.rawcode,Math.max(required.get(goal.rawcode)||0,goal.count||1));
+    const protectedStock=countsOf(protectedCounts);
+    for(const [result,ingredient] of rayleighPaths){
+      const missing=Math.max(0,(required.get(result)||0)-(stock.get(result)||0));
+      if(missing)required.set(ingredient,Math.max(required.get(ingredient)||0,protectedStock.get(ingredient)||0)+missing);
+    }
+    return (required.get(rareRayleigh)||0)<=(stock.get(rareRayleigh)||0);
+  }
   const countsOf=x=>new Map(Array.from(x instanceof Map?x.entries():Array.isArray(x)?x.map(u=>[u.rawcode,u.count]):Object.entries(x||{}),([k,v])=>[k,finite(v)?Math.max(0,Math.floor(v)):0]));
   const dict=x=>Object.fromEntries(Array.from(x).filter(([,v])=>v>0));
   const semanticValue=value=>value instanceof Map?Array.from(value,([key,item])=>[key,semanticValue(item)]).sort(([a],[b])=>String(a).localeCompare(String(b))):value instanceof Set?Array.from(value).sort():Array.isArray(value)?value.map(semanticValue):value&&typeof value==="object"?Object.fromEntries(Object.keys(value).sort().map(key=>[key,semanticValue(value[key])])):value;
@@ -74,7 +92,8 @@
     const brulee=Brulee?.create(catalog,options.bruleeCopy,{recipeGraph:graph});
     const mysteryRows=rows=>(rows||[]).some(row=>[typeof row==="string"?row:row?.rawcode,...(Array.isArray(row?.candidateRawcodes)?row.candidateRawcodes:[])].some(mysterious));
     const recommendationRecordData=data=>!data||includeMysteriousDecks?data:{...data,records:(data.records||[]).filter(record=>!mysteryRows(record.goals)&&!mysteryRows(record.entries)&&!mysteryRows(record.goalProjection?.excluded))};
-    const makeRecordProvider=data=>data&&Records?Records.create(catalog,combat,recommendationRecordData(data),{recipeGraph:graph,recordOnly,minRecordVersion,generateAlternatives:!recordOnly,handFitAdvisor}):null;
+    const requiredOwnedMaterialsAvailable=catalog.map?.sha256===classic2331Hash?rayleighAvailable:null;
+    const makeRecordProvider=data=>data&&Records?Records.create(catalog,combat,recommendationRecordData(data),{recipeGraph:graph,recordOnly,minRecordVersion,generateAlternatives:!recordOnly,handFitAdvisor,requiredOwnedMaterialsAvailable}):null;
     const handFitAdvisor=options.handFitRecommendations===true&&HandFit?HandFit.create(catalog,{recipeGraph:graph}):null;
     const earlyStoryAdvisor=options.earlyStoryRecommendations===true&&EarlyStory?EarlyStory.create(catalog,combat,options.storyRankings,{recipeGraph:graph,materialOnly:historicalRosterOnly}):null;
     let earlyStorySnapshot=null,earlyStoryAdvancedSeen=false;
@@ -94,11 +113,11 @@
     // 원문에서 수명·제거가 확인된 소환체는 실제 제작 목표나 보호 유닛으로 보지 않는다.
     const excludedSummons=new Set(["h076","h04T","h04Y","h05D","h0CA"]);
     const investmentMaterialProxies=new Set(["h04S","H08T"]);
-    const nonForecastable=new Set([...excludedSummons,...(combat.acquisitionModel?.randomOnlyRawcodes||[]),...(combat.acquisitionModel?.nonForecastableRawcodes||[]),
+    const nonForecastable=new Set([...excludedSummons,...(catalog.map?.sha256===classic2331Hash?[rareRayleigh]:[]),...(combat.acquisitionModel?.randomOnlyRawcodes||[]),...(combat.acquisitionModel?.nonForecastableRawcodes||[]),
       ...(catalog.recipes||[]).filter(r=>!Graph.isProductionRecipe(r)&&(r.ingredients||[]).some(i=>i.type==="RDUN"&&i.rawcode==="A800")).map(r=>r.resultUnitRawcode)]);
     const hash=catalog.map?.sha256||catalog.source_sha256;
     const transcendenceCapacity=classifyTranscendence(catalog);
-    const reinforcementAdvisor=(options.reinforcementRecommendations===true||supportCombat===utility)&&Reinforcements?Reinforcements.create(catalog,supportCombat,{recipeGraph:graph,unitModels:options.combatValidation?.unitModels,transcendenceSlotCosts:transcendenceCapacity.slotCosts}):null;
+    const reinforcementAdvisor=(options.reinforcementRecommendations===true||supportCombat===utility)&&Reinforcements?Reinforcements.create(catalog,supportCombat,{recipeGraph:graph,unitModels:options.combatValidation?.unitModels,transcendenceSlotCosts:transcendenceCapacity.slotCosts,requiredOwnedMaterialsAvailable}):null;
     const transcendenceState=(goals,inventory)=>{
       const needed=new Map();
       for(const goal of goals||[])if(transcendenceCapacity.slotCosts[goal.rawcode])needed.set(goal.rawcode,Math.max(needed.get(goal.rawcode)||0,goal.count||1));
@@ -881,6 +900,7 @@
         if(!route)continue;
         if(++compared>3||Date.now()>plannerOptions.planningDeadline)break;
         let cost={wood:route.wood,gold:route.gold,choiceWispCount:route.choiceWispCount,stepCount:route.stepCount};
+        let remainingStock=route.finalCounts;
         if((route.finalCounts[goal.rawcode]||0)<goal.count){
           const projected={...settings,...route.projectedSettings};
           const rest=graph.planDeck([desired],route.finalCounts,{...plannerOptions,items:projected.items,recipeConditions:projected.recipeConditions});
@@ -889,7 +909,9 @@
           const remainder=totals(rest.steps,projected);
           cost={wood:cost.wood+remainder.wood,gold:cost.gold+remainder.gold,
             choiceWispCount:cost.choiceWispCount+rest.choiceWispCount,stepCount:cost.stepCount+rest.stepCount};
+          remainingStock=rest.finalCounts;
         }
+        if(requiredOwnedMaterialsAvailable?.(context.roster.goals,countsOf(remainingStock),settings.protectedCounts)===false)continue;
         if(!brulee.prefer(cost,directPlan))continue;
         const {sourceCraftPlan,finalCounts,projectedSettings,...notice}=route;
         return {...notice,towardRawcode:goal.rawcode,towardName:goal.name};
@@ -1151,7 +1173,7 @@
         if(ownedAdvanced&&!(craftRunning&&earlyStorySnapshot))earlyStoryAdvancedSeen=true;
         if(craftRunning&&earlyStorySnapshot&&!manualFinal)return{...earlyStorySnapshot,nextBruleeRoute:null,earlyStory:{...earlyStorySnapshot.earlyStory,craftRunning:true},craftTargets:[],goalCraftTargets:earlyStorySnapshot.goalCraftTargets.map(target=>({...target,available:false,reason:"craft_running",expectedSteps:[],expectedStepCount:0})),planningMs:Date.now()-started};
         if(!craftRunning&&!manualFinal&&!earlyStoryAdvancedSeen&&settings.firstInvestmentAmbiguous!==true&&!firstInvestmentRawcode&&settings.kingPathEntryCompatibility.status!=="blocked"){
-          const rows=earlyStoryAdvisor.candidates(inventory,settings),actions=new Map(),held=countsOf(settings.protectedCounts),ids=[];
+          const rows=earlyStoryAdvisor.candidates(inventory,settings).filter(row=>requiredOwnedMaterialsAvailable?.([{rawcode:row.rawcode,count:1}],inventory,settings.protectedCounts)!==false),actions=new Map(),held=countsOf(settings.protectedCounts),ids=[];
           const planOptions={items:settings.items,recipeConditions:settings.recipeConditions,localPlayer:settings.localPlayer,supportedRecipeIds:settings.supportedRecipeIds,allowChoiceWisps:settings.allowChoiceWisps===true,protectedCounts:held,preserveGoalOrder:true,maxSteps:64,maxSearchNodes:settings.maxSearchNodes||16000,planningKingCraftBudget:settings.planningKingCraftBudget};
           for(const row of rows){
             const id="early-story:"+row.rawcode,goal={...info(row.rawcode),count:1};ids.push(id);
@@ -1188,7 +1210,7 @@
       const sourceSelection=requestedBase?{...settings,preferredDeckId:requestedBase}:lastSelectedTemplate?.sourceEvidence?.kind==="record_support_adaptation"&&(!settings.preferredDeckId||settings.preferredDeckId===lastSelectedTemplate.id)?{...settings,preferredDeckId:lastSelectedTemplate.sourceEvidence.baseTemplateId}:settings;
       let recordSet=recordProvider?.templates(inventory,sourceSelection);
       if(includeKingPathDecks&&recordProvider&&clearRecords&&(pendingKingPathTargetSelection||settings.manualDeckChoice===false||!settings.preferredDeckId)){
-        if(kingRecordProviderData!==clearRecords){kingRecordProviderData=clearRecords;const data=recommendationRecordData(clearRecords);kingRecordProvider=Records.create(catalog,combat,{...data,records:(data.records||[]).filter(record=>[...(record.goals||[]),...(record.entries||[])].some(entry=>entry.rawcode==="h0C8"))},{recipeGraph:graph,recordOnly,minRecordVersion,generateAlternatives:!recordOnly,handFitAdvisor});}
+        if(kingRecordProviderData!==clearRecords){kingRecordProviderData=clearRecords;const data=recommendationRecordData(clearRecords);kingRecordProvider=Records.create(catalog,combat,{...data,records:(data.records||[]).filter(record=>[...(record.goals||[]),...(record.entries||[])].some(entry=>entry.rawcode==="h0C8"))},{recipeGraph:graph,recordOnly,minRecordVersion,generateAlternatives:!recordOnly,handFitAdvisor,requiredOwnedMaterialsAvailable});}
         const supplement=kingRecordProvider.templates(inventory,{...sourceSelection,preferredDeckId:null}),seen=new Set((recordSet?.templates||[]).map(template=>template.id)),extra=supplement.templates.filter(template=>!seen.has(template.id));
         if(extra.length)recordSet={...recordSet,templates:[...(recordSet?.templates||[]),...extra],preselection:{...recordSet?.preselection,kingPathSupplementCount:extra.length,kingPathSupplementTruncated:supplement.preselection?.truncated===true}};
       }
@@ -1303,7 +1325,8 @@
       if(!craftRunning)pendingKingPathPreferenceReplan=false;
       const busyTemplate=craftRunning&&lastSelectedTemplate?.id===selectedId?lastSelectedTemplate:null;
       if(busyTemplate&&!allTemplates.some(template=>template.id===busyTemplate.id))allTemplates.push(busyTemplate);
-      const eligible=t=>(t.requiredOwnedMaterials||[]).every(x=>(inventory.get(x.rawcode)||0)>=(x.count||1))&&
+      const eligible=t=>requiredOwnedMaterialsAvailable?.(resolve(t,inventory,settings).goals,inventory,settings.protectedCounts)!==false&&
+        (t.requiredOwnedMaterials||[]).every(x=>(inventory.get(x.rawcode)||0)>=(x.count||1))&&
         (!(t.availableWhen?.ownedAnyRawcodes||[]).length||t.availableWhen.ownedAnyRawcodes.some(c=>(inventory.get(c)||0)>=(t.availableWhen.minimumCount||1)));
       const capacityAllowed=t=>transcendenceState(resolve(t,inventory,settings).goals,inventory).valid;
       const recordSourceAllowed=template=>{

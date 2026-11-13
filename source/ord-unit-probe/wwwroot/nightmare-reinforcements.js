@@ -157,7 +157,8 @@
    const targetBasis=descriptorsFor(context,stock),needs=assessNeeds(baseline,stock,context,targetBasis),requested=role==="auto"?needs.requestedRoles:[role];
    if(!requested.length){cached={...empty(),needs,protectedCounts:dict(locks),craftRunning:false};return cached;}
    const pool=new Map(roles.map(r=>[r,[]])),analyses=new Map(),rootStates=new Map(),previewResolutions=new Map(),supported=settings.supportedRecipeIds==null?null:new Set(settings.supportedRecipeIds);
-   for(const [raw,unit]of units){if(!includeMysteriousDecks&&unit.tier==="신비"||!native(raw)||proxies.has(raw)||!tiers.has(unit.tier)||(stock.get(raw)||0)>0||candidateSet&&!candidateSet.has(raw))continue;
+   for(const [raw,unit]of units){if(!includeMysteriousDecks&&unit.tier==="신비"||!native(raw)||proxies.has(raw)||!tiers.has(unit.tier)||(stock.get(raw)||0)>0||candidateSet&&!candidateSet.has(raw)||
+    options.requiredOwnedMaterialsAvailable?.([{rawcode:raw,count:1}],stock,locks)===false)continue;
     const roots=Array.from(recipes.values()).filter(r=>r.resultUnitRawcode===raw&&Graph.isProductionRecipe(r)&&supported?.has(String(r.id))).map(recipe=>({recipe,conditions:Graph.evaluateRecipeConditions(recipe.ingredients,settings.recipeConditions),items:Graph.evaluateItems(recipe.ingredients,settings.items)})).filter(row=>!row.conditions.blockedConditions.length&&!row.items.missingItems.some(i=>i.known&&i.missing>0));if(!roots.length)continue;
     rootStates.set(raw,roots.some(row=>row.conditions.conditionsReady&&row.items.itemsReady));
     const solo=adapter.assess([{rawcode:raw,count:1}]),none=adapter.assess([]),gains=deltas(none,solo,raw),eligible=roles.filter(r=>gains.some(g=>g.role===r));if(!eligible.length)continue;
