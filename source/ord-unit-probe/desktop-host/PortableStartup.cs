@@ -21,9 +21,9 @@ internal sealed record PortableLayout(string Root, string Server, string Catalog
         if (!value.TryGetProperty("formatVersion", out var version) || !version.TryGetInt32(out var number) || number != 1)
             throw new PortableStartupException("도우미 실행 설정을 읽지 못했습니다. 프로그램 폴더를 확인해 주세요.");
         ValidateRelative(value, "serverRelativePath", "app/server/OrdUnitProbe.exe");
-        ValidateRelative(value, "catalogRelativePath", "data/unit_catalog_2.323C.json");
+        ValidateRelative(value, "catalogRelativePath", "data/unit_catalog_2.331C.json");
         return new(root, Path.Combine(root, "app", "server", "OrdUnitProbe.exe"),
-            Path.Combine(root, "data", "unit_catalog_2.323C.json"), Path.Combine(root, "logs"));
+            Path.Combine(root, "data", "unit_catalog_2.331C.json"), Path.Combine(root, "logs"));
     }
 
     private static void ValidateRelative(JsonElement manifest, string name, string expected)
@@ -92,6 +92,37 @@ internal static class PortableStartup
             throw new PortableStartupException("수집 프로그램에 연결하지 못했습니다. 도우미를 다시 실행해 주세요.");
         }
         catch { started.Stop(); started.Dispose(); throw; }
+    }
+
+    internal static async Task<bool> RequestGracefulShutdownAsync(PortableServerHandle server)
+    {
+        if (server.HasExited) return true;
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+        { Timeout = TimeSpan.FromSeconds(4) };
+        const string origin = "http://127.0.0.1:8765";
+        try
+        {
+            using var healthResponse = await client.GetAsync(origin + "/api/health").ConfigureAwait(false);
+            if (!healthResponse.IsSuccessStatusCode || healthResponse.Content.Headers.ContentLength > 65536) return false;
+            using var health = JsonDocument.Parse(await healthResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
+            if (health.RootElement.GetProperty("application").GetString() != "ord-unit-probe" ||
+                health.RootElement.GetProperty("processId").GetInt32() != server.ProcessId) return false;
+            using var capabilitiesResponse = await client.GetAsync(origin + "/api/craft/capabilities").ConfigureAwait(false);
+            if (!capabilitiesResponse.IsSuccessStatusCode || capabilitiesResponse.Content.Headers.ContentLength > 65536) return false;
+            using var capabilities = JsonDocument.Parse(await capabilitiesResponse.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var token = capabilities.RootElement.GetProperty("token").GetString();
+            if (string.IsNullOrEmpty(token)) return false;
+            using var request = new HttpRequestMessage(HttpMethod.Post, origin + "/api/shutdown");
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            request.Headers.TryAddWithoutValidation("X-Craft-Token", token);
+            using var response = await client.SendAsync(request).ConfigureAwait(false);
+            return response.StatusCode == System.Net.HttpStatusCode.Accepted;
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException or JsonException or
+            InvalidOperationException or KeyNotFoundException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static PortableStartupException ProbeFailure(ProbeKind kind) => new(kind == ProbeKind.Foreign

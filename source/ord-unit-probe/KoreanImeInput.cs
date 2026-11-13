@@ -25,20 +25,20 @@ static class KoreanImeInput
         var pressed = new HashSet<ushort>();
         return await CompleteAsync(async () =>
         {
-            foreach (var step in steps)
+            for (var index = 0; index < steps.Length; index++)
             {
+                var step = steps[index];
                 cancel.ThrowIfCancellationRequested();
                 if (step.Action == KoreanTypingAction.HangulMode)
-                    await SetNativeAsync(target, true, pressed, cancel);
+                    await SetNativeAsync(target, pressed, cancel);
                 else if (step.Action == KoreanTypingAction.AlphanumericMode)
                 {
-                    // ! 등 기호를 입력한 뒤에 확정하므로 기호 앞에 공백을 넣지 않는다.
-                    if (target.ReadState().Native)
-                    {
-                        Press(target, VkHangul, false, pressed);
-                        await WaitStateAsync(target, state => !state.Native, cancel,
-                            "Korean IME did not commit and leave native mode.");
-                    }
+                    if (index == steps.Length - 1) Trace(trace, "committing_final_hangul");
+                    await SwitchToAlphanumericAsync(
+                        () => { target.EnsureInput(); return target.ReadState().Native; },
+                        () => HangulKeyReleased(pressed),
+                        token => PressHangulAsync(target, pressed, token),
+                        token => WaitStateAsync(target, state => !state.Native, token), cancel, trace);
                 }
                 else { Press(target, step.Key.VirtualKey, step.Key.Shift, pressed); await Task.Delay(18, cancel); }
             }
@@ -61,11 +61,11 @@ static class KoreanImeInput
         Func<string?> releasePressed, Action ensureInput, Func<bool> textMatches, CancellationToken cancel,
         Action<string>? trace = null)
     {
-        void Stage(string value) { try { trace?.Invoke(value); } catch (Exception error) when (error is IOException or InvalidOperationException) { } }
+        void Stage(string value) => Trace(trace, value);
         Exception? failure = null, restorationFailure = null;
         string? releaseError = null;
         try { cancel.ThrowIfCancellationRequested(); Stage("typing_korean"); await type(); }
-        catch (Exception error) { failure = error; }
+        catch (Exception error) { failure = error; Stage("typing_ended_before_commit_confirmation"); }
         finally
         {
             Stage("releasing_typing_keys");
@@ -85,46 +85,86 @@ static class KoreanImeInput
         return new(true, restorationFailure is null, restorationFailure?.Message);
     }
 
-    private static async Task SetNativeAsync(Target target, bool native, HashSet<ushort> pressed, CancellationToken cancel)
+    private static void Trace(Action<string>? trace, string stage)
+    {
+        try { trace?.Invoke(stage); }
+        catch (Exception error) when (error is IOException or InvalidOperationException) { }
+    }
+
+    internal static async Task SwitchToAlphanumericAsync(Func<bool> nativeMode, Func<bool> keyReleased,
+        Func<CancellationToken, Task> toggle, Func<CancellationToken, Task<bool>> waitForAlphanumeric,
+        CancellationToken cancel, Action<string>? trace = null)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            cancel.ThrowIfCancellationRequested();
+            // 이전 입력의 늦은 전환을 다시 되돌리지 않도록 현재 창과 모드를 다시 읽는다.
+            if (!nativeMode()) return;
+            if (!keyReleased()) break;
+            Trace(trace, attempt == 0 ? "requesting_ime_alphanumeric" : "retrying_ime_alphanumeric");
+            await toggle(cancel);
+            if (await waitForAlphanumeric(cancel))
+            {
+                Trace(trace, "ime_alphanumeric_confirmed");
+                return;
+            }
+        }
+        Trace(trace, "ime_alphanumeric_unconfirmed");
+        throw new IOException("Korean IME alphanumeric mode could not be enabled.");
+    }
+
+    private static async Task SetNativeAsync(Target target, HashSet<ushort> pressed, CancellationToken cancel)
     {
         target.EnsureInput();
         cancel.ThrowIfCancellationRequested();
         var before = target.ReadState();
-        if (native)
-        {
-            if (before.Native && before.Open) return;
-            target.SendControl(6, 1, requireInput: true);
-            target.SendControl(2, before.Conversion | NativeMode, requireInput: true);
-        }
-        else
-        {
-            if (!before.Native) return;
-            target.SendControl(2, before.Conversion & ~NativeMode, requireInput: true);
-        }
+        if (before.Native && before.Open) return;
+        target.SendControl(6, 1, requireInput: true);
+        target.SendControl(2, before.Conversion | NativeMode, requireInput: true);
         await Task.Delay(35, cancel);
         var changed = target.ReadState();
-        if (changed.Native == native && (!native || changed.Open)) return;
+        if (changed.Native && changed.Open) return;
         // 일부 한국어 IME는 SET 응답만으로 실제 입력 모드를 바꾸지 않는다.
-        if (changed.Native != native)
+        if (!changed.Native)
         {
-            Press(target, VkHangul, false, pressed);
-            await WaitStateAsync(target, state => state.Native == native && (!native || state.Open), cancel,
-                native ? "Korean IME native mode could not be enabled." : "Korean IME alphanumeric mode could not be enabled.");
+            await PressHangulAsync(target, pressed, cancel);
+            if (!await WaitStateAsync(target, state => state.Native && state.Open, cancel))
+                throw new IOException("Korean IME native mode could not be enabled.");
             return;
         }
         throw new IOException("Korean IME open state could not be verified.");
     }
 
-    private static async Task WaitStateAsync(Target target, Func<ImeState, bool> matches, CancellationToken cancel, string error)
+    private static async Task<bool> WaitStateAsync(Target target, Func<ImeState, bool> matches, CancellationToken cancel)
     {
         var elapsed = Stopwatch.StartNew();
         while (true)
         {
             target.EnsureInput();
             cancel.ThrowIfCancellationRequested();
-            if (matches(target.ReadState())) return;
-            if (elapsed.ElapsedMilliseconds >= 500) throw new IOException(error);
+            if (matches(target.ReadState())) return true;
+            if (elapsed.ElapsedMilliseconds >= 500) return false;
             await Task.Delay(20, cancel);
+        }
+    }
+
+    private static bool HangulKeyReleased(HashSet<ushort> pressed) =>
+        !pressed.Contains(VkHangul) && (GetAsyncKeyState(VkHangul) & 0x8000) == 0;
+
+    private static Task PressHangulAsync(Target target, HashSet<ushort> pressed, CancellationToken cancel)
+    {
+        return GameChatSubmission.PressOnceAsync(() => Send(false), () => Send(true), () =>
+        {
+            target.EnsureInput();
+            return HangulKeyReleased(pressed);
+        }, cancel);
+
+        void Send(bool up)
+        {
+            if (SendInput(1, [Key(VkHangul, up)], Marshal.SizeOf<Input>()) != 1)
+                throw new IOException("Windows did not accept the Korean IME toggle key.");
+            if (up) pressed.Remove(VkHangul);
+            else pressed.Add(VkHangul);
         }
     }
 
@@ -240,6 +280,7 @@ static class KoreanImeInput
     [StructLayout(LayoutKind.Sequential)] private struct Keyboard { public ushort Vk, Scan; public uint Flags, Time; public UIntPtr Extra; }
     [StructLayout(LayoutKind.Sequential)] private struct Mouse { public int X, Y; public uint Data, Flags, Time; public UIntPtr Extra; }
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, Input[] inputs, int size);
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);

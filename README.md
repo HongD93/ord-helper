@@ -95,7 +95,7 @@ flowchart LR
 - WebView2 Runtime
 - 소스 검사에 사용할 PowerShell과 Node.js
 
-현재 게임 연동 기준은 Warcraft III `1.28.5.7680`, 원랜디 `2.323[C]`다.
+개발 빌드의 게임 연동 대상은 Warcraft III `1.28.5.7680`, 원랜디 `2.331[C]`다.
 
 ## 빌드
 

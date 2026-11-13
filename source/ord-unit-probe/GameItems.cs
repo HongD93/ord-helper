@@ -1,13 +1,13 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 
-// 맵의 Qr 아이템 bool과 grant/consume에서 함께 갱신되는 player ability availability를 읽는다.
+// 맵의 RY 아이템 bool과 지급·소비 때 함께 갱신되는 player ability availability를 읽는다.
 // 유닛 인벤토리나 더미 수량을 아이템으로 해석하지 않으며 게임 함수를 호출하지 않는다.
 static class GameItems
 {
     internal const string SupportedVersion = "1.28.5.7680";
-    internal const string SupportedMapHash = "0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c";
-    private const string ScriptHash = "96201e80edec1b2764f85818760306c6b2f0becd390ba4d63f41c86f3dfaff6d";
+    internal const string SupportedMapHash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+    private const string ScriptHash = "308258a35af767807cabcc595f0f9513ff1aea52c82bcc0171dbdae6239fef13";
     private static readonly string[] Codes = ["AI00", "AI01", "AI02"];
     // 해당 Game.dll의 RVA A822D0. Native integer hash RVA1CACC0이 이 16개 상수를 사용한다.
     private static readonly uint[] HashWords = [
@@ -150,8 +150,8 @@ static class GameItems
     private static uint CheckedPointer(uint value) => Pointer(value) ? value : throw new IOException("Invalid native item pointer.");
     private static Evidence Source(string reason, int sampleCount, Entry[] entries) => new(
         "read_only_1285_player_ability_availability", reason, true, sampleCount, SupportedMapHash, ScriptHash,
-        [10566, 10567, 10568, 10570, 10571, 10572, 10704, 10718, 10756, 10758, 10776, 10780],
+        [11111, 11112, 11113, 11115, 11116, 11117, 11248, 11263, 11302, 11303, 11304, 11321, 11325, 11332],
         ["0x246310", "0x29CAD0", "0x2799F0", "0x2619A0", "0x1CACC0", "0xA822D0"],
         entries.Select((entry, index) => (entry, index)).ToDictionary(pair => Codes[pair.index], pair => pair.entry.Flags, StringComparer.Ordinal),
-        "Map Qr boolean is mirrored by initialization/grant/consume into per-player AIxx availability bit0. Values are booleans (0 or 1), not stack counts; Qr and unit item slots are not directly read.");
+        "Initialization, grant and consume keep the map RY boolean in sync with per-player AIxx availability bit0. The reader reports 0 or 1 per item code.");
 }

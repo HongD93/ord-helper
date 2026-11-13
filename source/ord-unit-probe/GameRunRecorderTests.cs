@@ -135,14 +135,21 @@ static class GameRunRecorderTests
         await first.ProcessAsync(Sample(1), default);
         var id = Text(Read(first), "id");
         await first.StopAsync(default);
+        var stoppedAt = DateTimeOffset.Parse(Text(Read(first), "lastObservedAtUtc")!);
+        JsonObject RestartSample(int sequence, int round, bool active = true, bool ended = false)
+        {
+            var sample = Sample(sequence, round, active, ended);
+            sample["timestamp"] = stoppedAt.AddSeconds(sequence).ToString("O");
+            return sample;
+        }
         var second = new GameRunRecorder(directory);
-        await second.ProcessAsync(Sample(10, round: 21), default);
+        await second.ProcessAsync(RestartSample(10, 21), default);
         Check(Files(directory).Length == 1 && Text(Read(second), "id") == id, "collector restart restores the same session file");
         Check(Text(Read(second)["outcome"]!.AsObject(), "result") == "in_progress", "confirmed activity resumes an interrupted run");
-        await second.ProcessAsync(Sample(11, round: 21, active: false, ended: true), default);
+        await second.ProcessAsync(RestartSample(11, 21, active: false, ended: true), default);
         var sealedPath = second.CurrentPathForTests!; var sealedText = File.ReadAllText(sealedPath);
         var third = new GameRunRecorder(directory);
-        await third.ProcessAsync(Sample(12, round: 22, active: false, ended: true), default);
+        await third.ProcessAsync(RestartSample(12, 22, active: false, ended: true), default);
         Check(File.ReadAllText(sealedPath) == sealedText && Files(directory).Length == 1, "restart on a passive terminal screen does not duplicate an already recorded game");
     }
 

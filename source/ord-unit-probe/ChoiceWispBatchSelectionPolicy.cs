@@ -1,8 +1,21 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 
 // 정확한 그룹과 개체별 소모 증거만 판단한다. 입력이나 메모리 쓰기는 하지 않는다.
 static class ChoiceWispBatchSelectionPolicy
 {
+    internal static uint? SourceAnchor(IReadOnlyList<(uint Address, Vector3 Position)> candidates,
+        IReadOnlyCollection<uint> selected, Vector3 cameraFocus, int desired)
+    {
+        if (!ValidCount(desired) || candidates.Count < desired || candidates.Select(unit => unit.Address).Distinct().Count() != candidates.Count ||
+            candidates.Any(unit => unit.Address < 0x10000 || !float.IsFinite(unit.Position.X + unit.Position.Y + unit.Position.Z)) ||
+            !float.IsFinite(cameraFocus.X + cameraFocus.Y + cameraFocus.Z)) return null;
+        var current = selected.ToHashSet();
+        return candidates.OrderByDescending(unit => current.Contains(unit.Address))
+            .ThenBy(unit => Vector3.DistanceSquared(unit.Position, cameraFocus))
+            .ThenBy(unit => unit.Address).First().Address;
+    }
+
     internal const int MaximumGroup = 12;
     internal static bool ValidCount(int count) => count is >= 1 and <= MaximumGroup;
     internal static bool Exact(IReadOnlyCollection<uint> selected, IReadOnlyList<GameChoiceInput.WispSample> expected,

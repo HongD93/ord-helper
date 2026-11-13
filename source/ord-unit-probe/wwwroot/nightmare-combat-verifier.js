@@ -25,6 +25,31 @@
     const p=chance/100,n=Math.floor(duration/interval),fraction=duration/interval-n;
     return {modeledUptime:p===0?0:1-Math.pow(1-p,n)*(1-fraction*p),modeledMeanGapSeconds:p===0?null:Math.pow(1-p,n)*(interval/p-fraction*interval)};
   }
+  function attackIntervalReference(attack){
+    const base=attack?.unmodifiedCooldownSeconds,buff=attack?.selfAttackSpeedReference;
+    if(!finite(base)||base<=0)return null;
+    return buff?.sourceVerified===true&&isNumericReferenceEligible(buff)&&buff.scope==="self"&&buff.stackingVerified===true&&finite(buff.valuePercent)&&buff.valuePercent>=0?base/(1+buff.valuePercent/100):base;
+  }
+  function componentDamageReference(component,attack){
+    const trigger=component?.trigger||{},interval=trigger.intervalSeconds??attackIntervalReference(attack),chance=trigger.chancePercent;
+    const periodic=["automatic_periodic","periodic"].includes(trigger.kind),attackProc=trigger.requiresAttackEvent===true&&["attack_proc","native_bash_attack_proc"].includes(trigger.kind);
+    const noCooldown=!finite(trigger.cooldownSeconds)||trigger.cooldownSeconds===0;
+    let rate=finite(interval)&&interval>0&&(periodic||attackProc&&finite(chance)&&chance>=0&&chance<=100&&noCooldown)?(periodic?1:chance/100)/interval:null;
+    if(trigger.kind==="mana_attack_counter"&&trigger.sourceVerified===true&&finite(trigger.attacksPerActivation)&&trigger.attacksPerActivation>0&&finite(interval)&&interval>0)rate=1/(trigger.attacksPerActivation*interval);
+    const hits=finite(component?.hitsPerActivation)&&component.hitsPerActivation>0?component.hitsPerActivation:1;
+    const multiplier=finite(component?.amountAttackMultiplier)&&component.amountAttackMultiplier>=1&&finite(attack?.meanDamage)?attack.meanDamage*(component.amountAttackMultiplier-1):null;
+    const amount=finite(component?.amountFlat)?component.amountFlat:multiplier;
+    const range=component?.amountFlatRange;
+    const manual=trigger.kind==="manual_active"&&finite(trigger.cooldownSeconds)&&trigger.cooldownSeconds>0;
+    return {...component,referenceActivationsPerSecond:rate,referenceAttackIntervalSeconds:interval,
+      referenceFlatDps:finite(rate)&&finite(amount)?amount*rate*hits:null,
+      referenceFlatDpsRange:finite(rate)&&finite(range?.minimum)&&finite(range?.maximum)?{minimum:range.minimum*rate*hits,maximum:range.maximum*rate*hits}:null,
+      referenceMaxHealthFractionPerSecond:finite(rate)&&finite(component?.amountMaxHealthPercent)?component.amountMaxHealthPercent/100*rate*hits:null,
+      referenceCurrentHealthFractionPerSecond:finite(rate)&&finite(component?.amountCurrentHealthPercent)?component.amountCurrentHealthPercent/100*rate*hits:null,
+      referenceCooldownFlatDps:manual&&finite(amount)?amount*hits/trigger.cooldownSeconds:null,
+      referenceCooldownMaxHealthFractionPerSecond:manual&&finite(component?.amountMaxHealthPercent)?component.amountMaxHealthPercent/100*hits/trigger.cooldownSeconds:null,
+      actualEffectiveDps:null};
+  }
   function createNativeManaUsage(catalog,combat){
     const hash=catalog?.map?.sha256,valid=typeof hash==="string"&&/^[a-f0-9]{64}$/i.test(hash)&&combat?.map?.sha256===hash;
     const catalogUnits=new Map(array(catalog?.units).map(unit=>[unit.rawcode,unit])),cache=new Map();
@@ -84,19 +109,9 @@
     function damageAssessment(goals,settings){
       const sources=goals.map(goal=>{
         const unit=units[goal.rawcode],attack=unit?.attackReference;
-        const components=array(unit?.damage?.components).filter(component=>component.sourceVerified===true&&isNumericReferenceEligible(component)).map(component=>{
-          const trigger=component.trigger||{},interval=trigger.intervalSeconds??attack?.unmodifiedCooldownSeconds;
-          const chance=trigger.chancePercent;
-          const periodic=["automatic_periodic","periodic"].includes(trigger.kind),attackProc=trigger.requiresAttackEvent===true&&["attack_proc","native_bash_attack_proc"].includes(trigger.kind);
-          const noCooldown=!finite(trigger.cooldownSeconds)||trigger.cooldownSeconds===0;
-          const rate=finite(interval)&&interval>0&&(periodic||attackProc&&finite(chance)&&noCooldown)?(periodic?1:chance/100)/interval:null;
-          const hits=finite(component.hitsPerActivation)&&component.hitsPerActivation>0?component.hitsPerActivation:1;
-          return {...component,referenceActivationsPerSecond:rate,referenceFlatDps:finite(rate)&&finite(component.amountFlat)?component.amountFlat*rate*hits:null,
-            referenceMaxHealthFractionPerSecond:finite(rate)&&finite(component.amountMaxHealthPercent)?component.amountMaxHealthPercent/100*rate*hits:null,
-            actualEffectiveDps:null};
-        });
+        const components=array(unit?.damage?.components).filter(component=>component.sourceVerified===true&&isNumericReferenceEligible(component)).map(component=>componentDamageReference(component,attack));
         return {rawcode:goal.rawcode,name:sourceName(goal.rawcode),count:goal.count,modelKnown:Boolean(unit),attackReference:attack||null,
-          rawBaseAttackDps:finite(attack?.rawSingleTargetDps)?attack.rawSingleTargetDps:null,components,unresolvedComponents:array(unit?.damage?.components).filter(component=>!isNumericReferenceEligible(component)),totalDps:null,complete:unit?.damage?.complete===true,
+          rawBaseAttackDps:finite(attack?.rawSingleTargetDps)?attack.rawSingleTargetDps:null,selfAdjustedBaseAttackDpsReference:finite(attack?.meanDamage)&&finite(attackIntervalReference(attack))?attack.meanDamage/attackIntervalReference(attack):null,components,unresolvedComponents:array(unit?.damage?.components).filter(component=>!isNumericReferenceEligible(component)),totalDps:null,complete:unit?.damage?.complete===true,
           unknownMajorDamage:unit?.damage?.unknownMajorDamage!==false};
       });
       const references=scenarioReferences(settings);
@@ -123,11 +138,12 @@
     function controlAssessment(goals,existing){
       const fromExisting=existing?.control;
       const stuns=goals.flatMap(goal=>array(units[goal.rawcode]?.control?.stuns).filter(source=>(source.sourceVerified===true||source.nativeObjectValueVerified===true)&&isNumericReferenceEligible(source)).map(source=>{
-        const interval=units[goal.rawcode]?.attackReference?.unmodifiedCooldownSeconds;
+        const interval=attackIntervalReference(units[goal.rawcode]?.attackReference);
         const attackProc=["proc","attack_proc","native_bash_attack_proc"].includes(source.triggerKind);
         const general=attackProc?proc(source.durationSeconds,interval,source.chancePercent):null;
         const hero=attackProc?proc(source.heroDurationSeconds,interval,source.chancePercent):null;
-        return {...source,rawcode:goal.rawcode,count:goal.count,generalModel:general,resistantHeroModel:hero,baseAttackInterval:interval,targetScenarioSelected:false};
+        const restricted=source.target&&source.target!=="enemy"||array(source.targetExclusions).length>0;
+        return {...source,rawcode:goal.rawcode,count:goal.count,generalModel:restricted?null:general,resistantHeroModel:restricted?null:hero,conditionalTargetModel:restricted?{target:source.target,generalModel:general,resistantHeroModel:hero}:null,baseAttackInterval:interval,targetScenarioSelected:false};
       }));
       const slows=goals.flatMap(goal=>array(units[goal.rawcode]?.control?.slows).filter(source=>(source.sourceVerified===true||source.nativeObjectValueVerified===true)&&isNumericReferenceEligible(source)).map(source=>({...source,rawcode:goal.rawcode,count:goal.count,value:source.valuePercent})));
       const unresolvedSources=goals.flatMap(goal=>[...array(units[goal.rawcode]?.control?.stuns),...array(units[goal.rawcode]?.control?.slows)].filter(source=>!isNumericReferenceEligible(source)).map(source=>({...source,rawcode:goal.rawcode,count:goal.count})));
@@ -233,6 +249,12 @@
       for(const consumer of validation.mana?.resourceCycles||[]){const cycle=consumer.attackAlignedTriggerSeconds??consumer.refillFromResetSeconds;if(finite(cycle)&&cycle>0)metrics.set(consumer.resource+":"+consumer.rawcode,-cycle);}
       const bounds=validation.control?.stun?.areaCommonTargetUptimeBounds;
       if(bounds&&finite(bounds.lowerBound))metrics.set("stunReferenceLower",bounds.lowerBound);
+      // 양쪽에 같은 검증 성분이 있을 때만 그 성분을 비교한다. 미보유·미확인 기술을 0으로 추가하지 않는다.
+      for(const source of array(validation.damage?.sources))for(const component of array(source.components)){
+        if(component.sourceVerified!==true||!isNumericReferenceEligible(component)||!finite(source.count)||source.count<=0)continue;
+        const identity=JSON.stringify([source.rawcode,component.id,component.damageType,component.scope,component.target,array(component.targetExclusions).slice().sort(),array(component.conditions).slice().sort(),component.trigger?.kind]);
+        for(const [kind,value]of [["flat",component.referenceFlatDps],["maxHealth",component.referenceMaxHealthFractionPerSecond],["currentHealth",component.referenceCurrentHealthFractionPerSecond]])if(finite(value))metrics.set("componentReference:"+kind+":"+identity,value*source.count);
+      }
       return metrics;
     }
     function compare(a,b){
@@ -253,5 +275,5 @@
     }
     return {assess,compare,compareEvidence};
   }
-  return {create,createNativeManaUsage,isRuntimeReferenceEligible,isNumericReferenceEligible};
+  return {create,createNativeManaUsage,isRuntimeReferenceEligible,isNumericReferenceEligible,componentDamageReference,attackIntervalReference};
 });

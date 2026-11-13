@@ -8,7 +8,7 @@ static class GameChoiceInput
 {
     public static bool Supported => true;
     internal static readonly string[] RegionResults = ["h003", "h002", "h001", "h007", "h004", "h008", "h005", "h009", "h006"];
-    // 지원 맵 2.323[C]의 war3map.w3e에서 확인한 9개 선택 구역의 평평한 지형 높이.
+    // 지원 맵 2.331[C]의 war3map.w3e에서 확인한 9개 선택 구역의 지형 높이.
     internal const float RegionGroundZ = 9.5f;
 
     internal sealed record ExecutionResult(string? Error, bool ConsumedWispVerified);

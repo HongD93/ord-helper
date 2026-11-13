@@ -1,11 +1,11 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 
-// 2.323[C]의 NB(선정 원로)와 NK(전역 효과 캐스터)를 읽기 전용으로 구분한다.
+// 2.331[C]의 Np(선정 원로)와 Nx(전역 효과 캐스터)를 읽기 전용으로 구분한다.
 // 게임 함수를 호출하거나 프로세스 메모리를 쓰지 않는다. 세션 간 캐시는 두지 않는다.
 static class ElderDetector
 {
-    internal const string MapHash = "0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c";
+    internal const string MapHash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
     private const uint HandleTableRva = 0xD30448;
     private static readonly Dictionary<string, (string Id, string Name)> Types = new(StringComparer.Ordinal)
     {
@@ -37,7 +37,7 @@ static class ElderDetector
 
     public static State Unknown(string reason) => new(null, null, "unknown", "unknown",
         new("read_only_world_and_effect_abilities", reason, 0, 0, 0, null,
-            new Dictionary<string, int>(), [8941, 8956, 58971, 58979]));
+            new Dictionary<string, int>(), [9486, 9501, 60858, 60866]));
 
     public static State Capture(MemoryReader memory, Roots roots, uint moduleBase, string? loadedMapHash)
     {
@@ -77,7 +77,7 @@ static class ElderDetector
             return new(match.Id, match.Name, status, effects,
                 new("read_only_world_and_effect_abilities", reason, scan.Selected.Length, scan.CasterCount,
                     scan.WorldErrors + scan.AbilityErrors, scan.Selected.Length == 1 ? scan.Selected[0].Rawcode : null,
-                    scan.Abilities, [8941, 8956, 58971, 58979, 8874, 8933, 8748, 8791]));
+                    scan.Abilities, [9486, 9501, 60858, 60866, 9403, 9475, 9321, 9329]));
         }
         if (scan.WorldErrors != 0) return Result(null, "unknown", "unknown", "incomplete_world_read");
         var usableCaster = scan.CasterCount == 1 && scan.AbilityErrors == 0;

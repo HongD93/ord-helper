@@ -52,19 +52,19 @@ static class GameProgressionTests
     }
     private static void Victory()
     {
-        var f=new Fixture();f.Value("YU",1);var state=f.Capture();
-        Check(state.Status=="confirmed"&&state.GameEnded==true&&state.ActivePlayer==true&&state.Victory==true,"a victory entry cannot count future rewards just because Ji remains true");
-        f.Value("YU",2);Unknown(f.Capture());
-        f=new Fixture();f.Write(f.Nodes["YU"]+0x1C,4);Unknown(f.Capture());
+        var f=new Fixture();f.Value("ZU",1);var state=f.Capture();
+        Check(state.Status=="confirmed"&&state.GameEnded==true&&state.ActivePlayer==true&&state.Victory==true,"a victory entry cannot count future rewards just because KJ remains true");
+        f.Value("ZU",2);Unknown(f.Capture());
+        f=new Fixture();f.Write(f.Nodes["ZU"]+0x1C,4);Unknown(f.Capture());
     }
     private static void Defeat()
     {
         var f=new Fixture();f.Write(Fixture.ArrayData,0);var state=f.Capture();
-        Check(state.Status=="confirmed"&&state.GameEnded==true&&state.ActivePlayer==false&&state.Victory==false,"the per-player inactive path clears Ji without requiring the shared victory flag");
+        Check(state.Status=="confirmed"&&state.GameEnded==true&&state.ActivePlayer==false&&state.Victory==false,"the per-player inactive path clears KJ without requiring the shared victory flag");
     }
     private static void KnownZero()
     {
-        var f = new Fixture();f.Value("X3",0);f.Value("on",0);f.Value("NE",0);f.Write(Fixture.ArrayData,0);
+        var f = new Fixture();f.Value("Y3",0);f.Value("qf",0);f.Value("Nr",0);f.Write(Fixture.ArrayData,0);
         var state=f.Capture();Check(state.Status=="confirmed"&&state.Round==0&&state.StoryIndex==0&&state.ActivePlayer==false&&state.Difficulty=="unknown","preparation values are explicit known zero rather than absent values");
     }
     private static void HashVectors()
@@ -93,7 +93,7 @@ static class GameProgressionTests
     private static void Signatures(){var f=new Fixture();f.Bytes[Fixture.Base+0x8C1666]=0;var state=f.Capture();Unknown(state);Check(state.Source.Reason=="unsupported_native_layout","a modified or other build cannot use presumed structure offsets");}
     private static void Changing()
     {
-        var f=new Fixture();var count=0;byte[] Read(uint address,int size){if(address==f.Nodes["X3"]&&++count==2)f.Value("X3",36);return f.Read(address,size);}
+        var f=new Fixture();var count=0;byte[] Read(uint address,int size){if(address==f.Nodes["Y3"]&&++count==2)f.Value("Y3",36);return f.Read(address,size);}
         var state=f.Capture(Read);Unknown(state);Check(state.Source.Reason=="progression_changing","round change between samples is not cached or rounded");
     }
     private static void ChangingTable()
@@ -103,25 +103,25 @@ static class GameProgressionTests
     }
     private static void ExactNames()
     {
-        var f=new Fixture();f.Add("x3",4,4);Check(f.Capture().Round==35,"same hash different-case key is skipped");
-        var old=f.Nodes["X3"];f.Write(old+0x14,Fixture.InvalidKey);f.Text(Fixture.InvalidKey,"zz\0");Unknown(f.Capture());
-        f=new Fixture();f.Add("X3",4,35);Unknown(f.Capture());
+        var f=new Fixture();f.Add("y3",4,4);Check(f.Capture().Round==35,"same hash different-case key is skipped");
+        var old=f.Nodes["Y3"];f.Write(old+0x14,Fixture.InvalidKey);f.Text(Fixture.InvalidKey,"zz\0");Unknown(f.Capture());
+        f=new Fixture();f.Add("Y3",4,35);Unknown(f.Capture());
     }
     private static void Types()
     {
-        foreach(var name in new[]{"X3","Ji"}){var f=new Fixture();f.Write(f.Nodes[name]+0x1C,5);Unknown(f.Capture());}
-        var a=new Fixture();a.Write(a.Nodes["Ji"]+0x18,0);Unknown(a.Capture());
-        var b=new Fixture();b.Write(b.Nodes["NE"]+0x18,5);Unknown(b.Capture());
+        foreach(var name in new[]{"Y3","KJ"}){var f=new Fixture();f.Write(f.Nodes[name]+0x1C,5);Unknown(f.Capture());}
+        var a=new Fixture();a.Write(a.Nodes["KJ"]+0x18,0);Unknown(a.Capture());
+        var b=new Fixture();b.Write(b.Nodes["Nr"]+0x18,5);Unknown(b.Capture());
     }
     private static void ScalarValueTags()
     {
         var f = new Fixture();
-        foreach (var name in new[] { "X3", "on", "NE", "sJ", "YU" }) { f.Value(name, 0); f.Write(f.Nodes[name] + 0x18, 0); }
+        foreach (var name in new[] { "Y3", "qf", "Nr", "t9", "ZU" }) { f.Value(name, 0); f.Write(f.Nodes[name] + 0x18, 0); }
         Check(f.Capture().Status == "confirmed", "constructor value-type0 is valid only with its initial zero value");
-        f.Value("X3", 1); Unknown(f.Capture());
-        f.Write(f.Nodes["X3"] + 0x18, 4); Check(f.Capture().Round == 1, "native scalar assignment sets the current-value tag to its declared integer type");
-        f = new Fixture(); f.Write(f.Nodes["YU"] + 0x18, 4); Unknown(f.Capture());
-        f = new Fixture(); f.Write(f.Nodes["Ji"] + 0x18, 8); Unknown(f.Capture());
+        f.Value("Y3", 1); Unknown(f.Capture());
+        f.Write(f.Nodes["Y3"] + 0x18, 4); Check(f.Capture().Round == 1, "native scalar assignment sets the current-value tag to its declared integer type");
+        f = new Fixture(); f.Write(f.Nodes["ZU"] + 0x18, 4); Unknown(f.Capture());
+        f = new Fixture(); f.Write(f.Nodes["KJ"] + 0x18, 8); Unknown(f.Capture());
         f = new Fixture(); f.Bytes[Fixture.Base + 0x8CB01A] = 0; Unknown(f.Capture());
     }
     private static void PlayerSlotStates()
@@ -139,14 +139,14 @@ static class GameProgressionTests
     }
     private static void TypeDiagnostics()
     {
-        var f = new Fixture(); f.Write(f.Nodes["X3"] + 0x1C, 5); var state = f.Capture(); Unknown(state);
+        var f = new Fixture(); f.Write(f.Nodes["Y3"] + 0x1C, 5); var state = f.Capture(); Unknown(state);
         Check(state.Source.Reason == "unexpected_global_type" && state.Source.TypeMismatch is
-            { Name: "X3", ExpectedType: 4, ActualType: 5, ActualValueTypeTag: 4 } && state.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 0, 4 }), "the observed scalar metadata is retained without accepting another type");
-        f = new Fixture(); f.Write(f.Nodes["Ji"] + 0x18, 0); state = f.Capture(); Unknown(state);
-        Check(state.Source.TypeMismatch is { Name: "Ji", ExpectedType: 13, ActualType: 13, ActualValueTypeTag: 0 } && state.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 13 }), "array tag mismatches are distinguished from element type mismatches");
+            { Name: "Y3", ExpectedType: 4, ActualType: 5, ActualValueTypeTag: 4 } && state.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 0, 4 }), "the observed scalar metadata is retained without accepting another type");
+        f = new Fixture(); f.Write(f.Nodes["KJ"] + 0x18, 0); state = f.Capture(); Unknown(state);
+        Check(state.Source.TypeMismatch is { Name: "KJ", ExpectedType: 13, ActualType: 13, ActualValueTypeTag: 0 } && state.Source.TypeMismatch.AllowedValueTypeTags.SequenceEqual(new uint[] { 13 }), "array tag mismatches are distinguished from element type mismatches");
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(state));
         Check(json.RootElement.GetProperty("victory").ValueKind == JsonValueKind.Null &&
-            json.RootElement.GetProperty("source").GetProperty("globalTypeMismatch").GetProperty("name").GetString() == "Ji", "diagnostic JSON does not fabricate a terminal flag");
+            json.RootElement.GetProperty("source").GetProperty("globalTypeMismatch").GetProperty("name").GetString() == "KJ", "diagnostic JSON does not fabricate a terminal flag");
         Check(new Fixture().Capture().Source.TypeMismatch is null, "a successful capture cannot inherit an earlier mismatch");
     }
     private static void InvalidStructures()
@@ -154,13 +154,13 @@ static class GameProgressionTests
         foreach(var address in new[]{Fixture.Base+0xD0DEF8,Fixture.Environment+0x14,Fixture.Instance+0x90,Fixture.Vms+4,Fixture.Vm+0x285C,Fixture.Globals+0x1C})
         {var f=new Fixture();f.Write(address,0);Unknown(f.Capture());}
         foreach(var mask in new uint[]{2,0xFFFFFFFF,0x1FFFF}){var f=new Fixture();f.Write(Fixture.Globals+0x24,mask);Unknown(f.Capture());}
-        var a=new Fixture();a.Write(a.Bucket("X3"),3);Unknown(a.Capture());
+        var a=new Fixture();a.Write(a.Bucket("Y3"),3);Unknown(a.Capture());
     }
     private static void CollisionFailure()
     {
-        var f=new Fixture();f.Write(f.Nodes["X3"]+8,f.Nodes["X3"]);Unknown(f.Capture());
-        f=new Fixture();f.Write(f.Bucket("X3")+8,0);Unknown(f.Capture());
-        f=new Fixture();for(var i=0;i<129;i++)f.Add("x3",4,0);Unknown(f.Capture());
+        var f=new Fixture();f.Write(f.Nodes["Y3"]+8,f.Nodes["Y3"]);Unknown(f.Capture());
+        f=new Fixture();f.Write(f.Bucket("Y3")+8,0);Unknown(f.Capture());
+        f=new Fixture();for(var i=0;i<129;i++)f.Add("y3",4,0);Unknown(f.Capture());
     }
     private static void Arrays()
     {
@@ -171,7 +171,7 @@ static class GameProgressionTests
     private static void PlayerIdentity(){var f=new Fixture();f.Bytes[Fixture.Player+0x30]=1;Unknown(f.Capture());}
     private static void ValueBounds()
     {
-        foreach(var (name,value) in new(string,uint)[]{("X3",66),("X3",uint.MaxValue),("on",15),("NE",7),("sJ",uint.MaxValue)})
+        foreach(var (name,value) in new(string,uint)[]{("Y3",66),("Y3",uint.MaxValue),("qf",15),("Nr",7),("t9",uint.MaxValue)})
         {var f=new Fixture();f.Value(name,value);Unknown(f.Capture());}
     }
     private static void ReadFailures()
@@ -182,7 +182,7 @@ static class GameProgressionTests
     }
     private static void NoCache()
     {
-        var f=new Fixture();Check(f.Capture().ActivePlayer==true,"baseline active");f.Value("NE",5);f.Value("sJ",1);f.Write(Fixture.ArrayData,0);
+        var f=new Fixture();Check(f.Capture().ActivePlayer==true,"baseline active");f.Value("Nr",5);f.Value("t9",1);f.Write(Fixture.ArrayData,0);
         var state=f.Capture();Check(state.Status=="confirmed"&&state.ActivePlayer==false&&state.Difficulty=="other"&&state.GameEnded==true&&state.RoundTransitionDepth==1,"new player-defeat state is independently read");
         f.Write(Fixture.ArrayData,1);state=f.Capture();Check(state.GameEnded==false&&state.RoundTransitionDepth==1,"a positive transition semaphore alone is not interpreted as a game-ended flag");
         var other=new Fixture(1);other.Write(Fixture.ArrayData+4,0);Check(other.Capture().ActivePlayer==false&&other.Capture().LocalPlayer==1,"local array index is not reused");
@@ -211,7 +211,7 @@ static class GameProgressionTests
             for(uint i=0;i<64;i++)Write(Buckets+i*12,4);
             Write(Roots.Players+0x58+(uint)local*4,Player);Bytes[Player+0x30]=(byte)local;Write(Player+0x270,1);
             Fill(ArrayHeader,16);Write(ArrayHeader+8,4);Write(ArrayHeader+12,ArrayData);for(uint i=0;i<4;i++)Write(ArrayData+i*4,1);
-            Add("X3",4,35);Add("on",4,14);Add("NE",4,6);Add("sJ",4,0);Add("Ji",13,ArrayHeader);Add("YU",8,0);
+            Add("Y3",4,35);Add("qf",4,14);Add("Nr",4,6);Add("t9",4,0);Add("KJ",13,ArrayHeader);Add("ZU",8,0);
         }
         internal uint Bucket(string name)=>Buckets+(GameProgression.NameHash(name)&63)*12;
         internal void Add(string name,uint type,uint value)
