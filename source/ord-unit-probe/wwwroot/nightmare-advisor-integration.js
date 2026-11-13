@@ -1,6 +1,63 @@
 (function (root) {
   "use strict";
   const evidenceHash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value);
+  const combatInventories = new WeakMap();
+  const classic2331Hash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+  function configureCombatInventory(catalog,data) {
+    combatInventories.delete(catalog);
+    if (catalog?.map?.sha256!==classic2331Hash||data?.schemaVersion!==1||data.mapSha256!==classic2331Hash||
+        !Array.isArray(data.temporaryRawcodes)||!data.canonicalByRawcode||typeof data.canonicalByRawcode!=="object"||Array.isArray(data.canonicalByRawcode)) return null;
+    const units=new Map((catalog.units||[]).map(unit=>[unit.rawcode,unit]));
+    const recipeMaterials=new Set(),recipeResults=new Set();
+    for(const recipe of catalog.recipes||[]){
+      recipeResults.add(recipe.resultUnitRawcode);
+      for(const code of recipe.casterUnitRawcodes||[])recipeMaterials.add(code);
+      for(const item of recipe.ingredients||[]){
+        if(item.type!=="UNIT")continue;
+        recipeMaterials.add(item.rawcode);
+        recipeMaterials.add(item.logicalRawcode);
+        for(const code of item.acceptedRawcodes||[])recipeMaterials.add(code);
+      }
+    }
+    const progressSources=new Set(),progressResults=new Set();
+    for(const transform of catalog.progressTransformations?.entries||[]){
+      progressSources.add(transform.sourceRawcode);
+      progressResults.add(transform.resultRawcode);
+    }
+    const temporary=new Set(data.temporaryRawcodes);
+    const aliases=new Map(Object.entries(data.canonicalByRawcode));
+    if(temporary.size!==data.temporaryRawcodes.length||
+       [...temporary].some(code=>!units.has(code)||recipeMaterials.has(code)||recipeResults.has(code)||progressSources.has(code)||progressResults.has(code))||
+       [...aliases].some(([form,canonical])=>units.get(form)?.playable!==true||units.get(canonical)?.playable!==true||
+         recipeMaterials.has(form)||recipeMaterials.has(canonical)||recipeResults.has(form)||progressSources.has(form)||
+         progressResults.has(form)||progressResults.has(canonical)||
+         temporary.has(form)||temporary.has(canonical)||aliases.has(canonical)))return null;
+    const equivalent=new Set([...aliases.keys(),...aliases.values()]);
+    const identity=Object.freeze({
+      workerMetadata:Object.freeze({schemaVersion:1,mapSha256:classic2331Hash,
+        canonicalByRawcode:Object.freeze(Object.fromEntries(aliases))}),
+      hide:code=>temporary.has(code)||aliases.has(code),
+      normalize(counts){
+        const result=new Map();
+        for(const [code,count] of counts){
+          if(temporary.has(code))continue;
+          const canonical=aliases.get(code)||code;
+          const total=(result.get(canonical)||0)+count;
+          if(!Number.isSafeInteger(total))return null;
+          result.set(canonical,total);
+        }
+        return result;
+      },
+      nativeProtection(counts){
+        // Neither side of these identity pairs can be selected or consumed by a recipe.
+        // Keeping a specific form in a native request would abort on a harmless combat transition.
+        return counts&&Object.fromEntries(Object.entries(counts).filter(([code])=>!equivalent.has(code)));
+      }
+    });
+    combatInventories.set(catalog,identity);
+    return identity;
+  }
+  const combatInventory=catalog=>combatInventories.get(catalog)||null;
   const nativeRunId=value=>typeof value==="string"&&/^auto-\d{8}T\d{13}Z-[a-f0-9]{16}$/.test(value);
   const nativeRoster=rows=>Array.isArray(rows)?rows.map(row=>[row?.rawcode,row?.count]).sort(([left],[right])=>String(left)<String(right)?-1:String(left)>String(right)?1:0):null;
   function validNativeRecord(record,catalog){
@@ -287,7 +344,9 @@
         stopWorker(); pending = null; result = null; failed = true;
         show("추천을 불러오지 못했어요. 다시 계산해 주세요.");
       };
-      try { worker.postMessage({type:"init", catalog:state.catalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,
+      const inventory=combatInventory(state.catalog);
+      const workerCatalog=inventory?{...state.catalog,combatInventory:inventory.workerMetadata}:state.catalog;
+      try { worker.postMessage({type:"init", catalog:workerCatalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,
         ...(nativeData?{randomDrops,combatValidation}:{}),recordsRevision:activeRecordsRevision}); }
       catch {
         stopWorker(); pending = null; result = null; failed = true;
@@ -429,8 +488,9 @@
     return {
       update(next) {
         const changed=state?.craftRunning!==next.craftRunning||state?.craftStopRequested!==next.craftStopRequested||state?.capabilities?.stopCraftSupported!==next.capabilities?.stopCraftSupported||state?.craftMessage!==next.craftMessage||state?.craftTone!==next.craftTone||state?.capabilities?.protectedCountsSupported!==next.capabilities?.protectedCountsSupported||state?.capabilities?.exactPlanSupported!==next.capabilities?.exactPlanSupported;
-        state=next;
-        const action=connected()?root.OrdNightmarePanel.progressionAction?.(next.catalog,next.snapshot,next.counts)??null:null;
+        const inventory=combatInventory(next.catalog);
+        state=inventory&&next.counts instanceof Map?{...next,counts:inventory.normalize(next.counts)}:next;
+        const action=connected()?root.OrdNightmarePanel.progressionAction?.(state.catalog,state.snapshot,state.counts)??null:null;
         const priorityChanged=priorityAction?.title!==action?.title||priorityAction?.detail!==action?.detail;
         priorityAction=action;
         startRecordPolling();if(!applyRecordUpdate())schedule(false);if(changed||priorityChanged)show();else publishOverlay();
@@ -450,5 +510,5 @@
       destroy() { destroyed = true;overlayBridge?.removeEventListener?.("message",onOverlayAction);publishOverlay(); clearInterval(staleTimer);if(recordPollTimer)clearInterval(recordPollTimer);recordFetchAbort?.abort();pendingRecordsSnapshot=null;if (timer) clearTimeout(timer); stopWorker(); panel.destroy(); }
     };
   }
-  root.OrdNightmareIntegration = {create,validNativeRecord,mergeLocalRecords};
+  root.OrdNightmareIntegration = {create,validNativeRecord,mergeLocalRecords,configureCombatInventory,combatInventory};
 })(globalThis);

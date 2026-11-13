@@ -46,7 +46,7 @@
     const final=rawcode=>{const unit=units.get(rawcode);return unit?.playable===true&&unit.isSummon!==true&&unit.isSummoned!==true&&!excluded.has(rawcode)&&tiers.has(unit.tier);};
     const normalize=rows=>{const counts=new Map();for(const row of rows||[]){const rawcode=typeof row==="string"?row:row?.rawcode,count=typeof row==="string"?1:row?.count;if(typeof rawcode==="string"&&Number.isSafeInteger(count)&&count>0)counts.set(rawcode,Math.max(counts.get(rawcode)||0,count));}return Array.from(counts).sort(([a],[b])=>a.localeCompare(b));};
     const evidence=deck.sourceEvidence,original=["clear_record","record_support_adaptation"].includes(evidence?.kind)&&Array.isArray(evidence.mapping)&&evidence.mapping.length>0&&Array.isArray(evidence.recordIds)&&evidence.recordIds.length>0&&Array.isArray(evidence.urls)&&evidence.urls.length>0;
-    const finals=original?normalize(evidence.mapping.filter(entry=>final(entry.rawcode))):[];
+    const finals=original?normalize(evidence.mapping.filter(entry=>final(entry.rawcode)).map(entry=>({...entry,rawcode:Records?.combatCanonicalRawcode?.(catalog,entry.rawcode)??entry.rawcode}))):[];
     if(!original||!finals.length)return JSON.stringify([deck.mode||deck.direction||"unknown","roster",normalize(deck.goals)]);
     const mainCodes=new Set(deck.assessment?.coreComposition?.dpsRawcodes||[]),additionalMain=normalize((deck.goals||[]).filter(goal=>mainCodes.has(goal.rawcode)&&["전설","히든"].includes(units.get(goal.rawcode)?.tier)));
     return JSON.stringify([deck.mode||deck.direction||"unknown","original_final",finals,additionalMain]);
@@ -1138,8 +1138,8 @@
         if(extra.length)recordSet={...recordSet,templates:[...(recordSet?.templates||[]),...extra],preselection:{...recordSet?.preselection,kingPathSupplementCount:extra.length,kingPathSupplementTruncated:supplement.preselection?.truncated===true}};
       }
       const usingRecords=Boolean([...(recordSet?.templates||[]),...(recordSet?.missingRandomTemplates||[])].some(t=>(settings.direction==null||settings.direction==="all"||settings.direction===t.direction)&&(includeKingPathDecks||!kingPathDependent(resolve(t,inventory,settings),t))));
-      let templates=recordOnly?(recordSet?.templates||[]).filter(template=>Records?.originalClearTemplate?.(template)===true):usingRecords?[...recordSet.templates,...(recordSet.alternatives||[])]:fallbackTemplates;
-      const missingRandomBases=(recordSet?.missingRandomTemplates||[]).filter(template=>Records?.originalClearTemplate?.(template)===true&&
+      let templates=recordOnly?(recordSet?.templates||[]).filter(template=>Records?.originalClearTemplate?.(template,catalog)===true):usingRecords?[...recordSet.templates,...(recordSet.alternatives||[])]:fallbackTemplates;
+      const missingRandomBases=(recordSet?.missingRandomTemplates||[]).filter(template=>Records?.originalClearTemplate?.(template,catalog)===true&&
         (includeKingPathDecks||!kingPathDependent(resolve(template,inventory,settings),template))&&(includeMysteriousDecks||!mysteriousDependent(template)));
       if(!includeKingPathDecks)templates=templates.filter(template=>!kingPathDependent(resolve(template,inventory,settings),template));
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
@@ -1237,7 +1237,7 @@
             supportSearch.evaluatedBases++;supportSearch.truncated||=adapted.search?.limitReached===true||adapted.search?.bounded===true;
             if(adapted.randomSupportNeeds?.length)supportSearch.unfilledRandomSupport.push({baseTemplateId:base.id,requirements:adapted.randomSupportNeeds});
             if(adapted.randomSupportSuggestions?.length)supportSearch.randomSupportSuggestions.push({baseTemplateId:base.id,suggestions:adapted.randomSupportSuggestions});
-            adaptedTemplates.push(...(adapted.templates||[]).filter(template=>Records.originalClearTemplate(base)&&supportAdapter.isAdaptation(template,base)).slice(0,24-adaptedTemplates.length));
+            adaptedTemplates.push(...(adapted.templates||[]).filter(template=>Records.originalClearTemplate(base,catalog)&&supportAdapter.isAdaptation(template,base)).slice(0,24-adaptedTemplates.length));
           }
           supportSearch.generated=adaptedTemplates.length;supportSearch.truncated||=originals.length>bases.length;
           supportAdaptationCache={signature,templates:adaptedTemplates,search:{...supportSearch}};
@@ -1252,9 +1252,9 @@
         (!(t.availableWhen?.ownedAnyRawcodes||[]).length||t.availableWhen.ownedAnyRawcodes.some(c=>(inventory.get(c)||0)>=(t.availableWhen.minimumCount||1)));
       const capacityAllowed=t=>transcendenceState(resolve(t,inventory,settings).goals,inventory).valid;
       const recordSourceAllowed=template=>{
-        if(!recordOnly||Records?.originalClearTemplate?.(template)===true)return true;
+        if(!recordOnly||Records?.originalClearTemplate?.(template,catalog)===true)return true;
         const original=adaptationBases.get(template.sourceEvidence?.baseTemplateId)||(template===busyTemplate?lastSelectedSupportBase:null);
-        return Boolean(supportAdapter&&original&&Records.originalClearTemplate(original)&&supportAdapter.isAdaptation(template,original));
+        return Boolean(supportAdapter&&original&&Records.originalClearTemplate(original,catalog)&&supportAdapter.isAdaptation(template,original));
       };
       const allowed=allTemplates.filter(t=>(includeMysteriousDecks||!mysteriousDependent(t))&&recordSourceAllowed(t)&&capacityAllowed(t)&&(includeKingPathDecks||!kingPathDependent(resolve(t,inventory,settings),t))&&(t.id===busyTemplate?.id||eligible(t)&&["physical","magic","hybrid","unknown"].includes(t.direction)&&(settings.direction==null||settings.direction==="all"||settings.direction===t.direction)));
       if(settings.preferredDeckId&&!upperRebase&&settings.preferredDeckId!==suppressedPreferredId&&(settings.manualDeckChoice!==false||!selectedId)&&(!craftRunning||!selectedId)&&!(legendChanged&&!upperAnchors.size&&settings.manualDeckChoice===false)&&allowed.some(t=>t.id===settings.preferredDeckId)){
