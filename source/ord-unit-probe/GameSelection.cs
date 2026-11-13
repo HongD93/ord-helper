@@ -429,6 +429,7 @@ static class GameSelection
             return SelectionRetryPolicy.PortraitOutcome(new(null, null), eligible);
         }
         var plan = new PortraitSelectionPlan(original, initial.Unit);
+        var selectionWatch = System.Diagnostics.Stopwatch.StartNew();
         while (plan.ClickCount < 2)
         {
             if (!ChoiceInputValid(memory, moduleBase, roots, window)) return new(null, "게임 화면이 바뀌어 초상화 선택을 중단했습니다.");
@@ -441,8 +442,9 @@ static class GameSelection
             if (portrait is null) return SelectionRetryPolicy.PortraitOutcome(new(null, null), eligible);
             var x = (int)Math.Round(((portrait.Rect.Left + portrait.Rect.Right) * .5 - geometry.Root.Left) / (geometry.Root.Right - geometry.Root.Left) * geometry.Width);
             var y = (int)Math.Round((geometry.Root.Top - (portrait.Rect.Bottom + portrait.Rect.Top) * .5) / (geometry.Root.Top - geometry.Root.Bottom) * geometry.Height);
+            var alreadyAtPortrait = CursorAtClient(window, (x, y));
             var screen = MoveToClient(window, x, y);
-            await Task.Delay(60, cancel);
+            if (!alreadyAtPortrait) await Task.Delay(15, cancel);
             var freshSelection = ReadSelectedGroupAddresses(memory, roots);
             var fresh = FindPortrait(memory, moduleBase, roots, geometry, casters, freshSelection, plan.Target);
             if (!CursorAtClient(window, (x, y)) || !ChoiceInputValid(memory, moduleBase, roots, window) || fresh != portrait ||
@@ -451,22 +453,20 @@ static class GameSelection
                 return new(null, "초상화나 사용자 입력이 바뀌어 선택을 중단했습니다.");
             // 첫 클릭 후 subgroup/정렬이 달라져도 두 번째 클릭은 같은 개체를 대상으로 한다.
             plan.BeforeClick(portrait.Unit);
-            await ClickAsync(cancel);
+            await ClickAsync(cancel, waitForReleaseProcessing: false);
             if (GetForegroundWindow() != window || MouseOrModifiersHeld()) return new(null, "사용자 입력이 감지되어 초상화 선택을 중단했습니다.");
-            var safe = geometry.SafePoint();
-            MoveToClient(window, safe.X, safe.Y);
-            for (var attempt = 0; attempt < 20; attempt++)
+            for (var attempt = 0; attempt < 80; attempt++)
             {
-                await Task.Delay(40, cancel);
                 if (!ChoiceInputValid(memory, moduleBase, roots, window)) return new(null, "게임 화면이 바뀌어 초상화 선택을 중단했습니다.");
                 var current = ReadSelectedGroupAddresses(memory, roots);
-                if (current.Length == 0) continue; // 선택 전환 중에는 클릭을 더 보내지 않고 기다린다.
+                if (current.Length == 0) { await Task.Delay(10, cancel); continue; } // 선택 전환 중에는 클릭을 더 보내지 않고 기다린다.
                 var active = ReadGroupFocusAddress(memory, roots);
                 var observed = plan.Observe(current, active);
                 if (observed == PortraitSelectionAction.Stale)
                     return new(null, "선택한 유닛 구성이 바뀌어 초상화 선택을 중단했습니다.");
                 if (observed == PortraitSelectionAction.Ready && await VerifySingleAsync() is { } verified) return verified;
                 if (observed == PortraitSelectionAction.Click && active == plan.Target) break;
+                await Task.Delay(10, cancel);
             }
         }
         return SelectionRetryPolicy.PortraitOutcome(new(null, null), eligible);
@@ -477,7 +477,9 @@ static class GameSelection
             await Task.Delay(30, cancel);
             if (!ChoiceInputValid(memory, moduleBase, roots, window) || ReadSingleSelectedAddress(memory, roots) != plan.Target ||
                 ReadCommandFocusAddress(memory, roots) != plan.Target || !IsCurrentCaster(memory, roots, plan.Target, casters)) return null;
-            Console.WriteLine($"Portrait single selection verified: selected=0x{plan.Target:X8}, clicks={plan.ClickCount}.");
+            Console.WriteLine($"Portrait single selection verified: selected=0x{plan.Target:X8}, clicks={plan.ClickCount}, elapsedMs={selectionWatch.ElapsedMilliseconds}.");
+            var safe = geometry.SafePoint();
+            MoveToClient(window, safe.X, safe.Y);
             return new(plan.Target, null, true);
         }
     }
@@ -498,17 +500,18 @@ static class GameSelection
             return unit is not null && single.Error is null ? new([unit], null) : new([], single.Error ?? "선택한 위습을 확인하지 못했습니다.");
         }
         var selected = ReadSelectedAddresses(memory, roots);
-        if (SelectedOwned(selected) is not { } initial || initial.Count(unit => unit.Rawcode == "e018") < count)
+        var initial = SelectedOwned(selected);
+        if (initial is null || initial.Count(unit => unit.Rawcode == "e018") < count)
         {
-            var single = await EnsureCasterAsync(memory, moduleBase, roots, window,
-                new CraftCommand("WISP", resultRawcode, 1, [new("e018", 1)], null, null, ["e018"]), owned, cancel, cameraSession: cameraSession);
-            if (single.Error is not null || single.Address is null) return new([], single.Error ?? "선택 위습을 선택하지 못했습니다.");
-            var anchorUnit = wisps.SingleOrDefault(unit => unit.Address == single.Address);
-            if (anchorUnit is null) return new([], "선택한 위습을 확인하지 못했습니다.");
-            var anchor = ReadPosition(memory, anchorUnit);
+            // 묶음은 먼저 한 기를 클릭하지 않고, 현재 보유한 위습 위치에서 바로 영역을 잡는다.
             var sourceView = ReadGeometry(memory, roots, window, moduleBase);
-            var sourcePositions = wisps.Where(unit => CurrentOwnedUnit(memory, roots, unit.Address, "e018"))
-                .Select(unit => ReadPosition(memory, unit)).OrderBy(position => Vector3.DistanceSquared(position, anchor)).Take(count).ToArray();
+            var positions = wisps.Where(unit => CurrentOwnedUnit(memory, roots, unit.Address, "e018"))
+                .Select(unit => (unit.Address, Position: ReadPosition(memory, unit))).ToArray();
+            var anchorAddress = ChoiceWispBatchSelectionPolicy.SourceAnchor(positions, selected, sourceView.Focus, count);
+            if (anchorAddress is null) return new([], "선택 위습 위치를 확인하지 못했습니다.");
+            var anchor = positions.Single(unit => unit.Address == anchorAddress).Position;
+            var sourcePositions = positions.Select(unit => unit.Position)
+                .OrderBy(position => Vector3.DistanceSquared(position, anchor)).Take(count).ToArray();
             if (ChoiceWispCameraSession.CanReuseSourceView(sourceView, anchor, sourcePositions))
             {
                 if (await PrepareChoiceTargetViewAsync(memory, moduleBase, roots, window, anchor + new Vector3(0, 0, 8), cancel, cameraSession) is null)
@@ -699,10 +702,11 @@ static class GameSelection
             while (true)
             {
                 cancel.ThrowIfCancellationRequested();
-                var frame = ReadWaitObservation(out _);
+                var stage = wait.Stage;
+                var frame = ReadWaitObservation(out _, out var contextFailure);
                 var decision = wait.Observe(clock.Elapsed, frame);
                 if (decision.Action == ChoiceWispWaitAction.MoveModeReady) break;
-                if (decision.Action == ChoiceWispWaitAction.Stop) return WaitFailure(decision);
+                if (decision.Action == ChoiceWispWaitAction.Stop) return WaitFailure(decision, contextFailure, stage);
                 await Task.Delay(ChoiceWispWaitPolicy.PollInterval, cancel);
             }
             var screen = MoveToClient(window, point.Value.X, point.Value.Y);
@@ -725,7 +729,8 @@ static class GameSelection
             while (true)
             {
                 cancel.ThrowIfCancellationRequested();
-                var frame = ReadWaitObservation(out var currentWisps);
+                var stage = wait.Stage;
+                var frame = ReadWaitObservation(out var currentWisps, out var contextFailure);
                 var decision = wait.Observe(clock.Elapsed, frame);
                 if (decision.Action == ChoiceWispWaitAction.MoveAccepted)
                 {
@@ -761,7 +766,7 @@ static class GameSelection
                         continue;
                     }
                 }
-                if (decision.Action == ChoiceWispWaitAction.Stop) return WaitFailure(decision);
+                if (decision.Action == ChoiceWispWaitAction.Stop) return WaitFailure(decision, contextFailure, stage);
                 await Task.Delay(ChoiceWispWaitPolicy.PollInterval, cancel);
             }
 
@@ -797,9 +802,10 @@ static class GameSelection
                     if (!GameChoiceInput.SameWisp(beforeWisps[sourceIndex], current, roots.LocalPlayer)) throw new IOException("recovery_source_identity_changed");
                     return current.Active;
                 }
-                bool SingleContext() => ChoiceContextValid(memory, moduleBase, roots, window) &&
-                    SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)) &&
-                    currentGeometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase));
+                string? SingleContextFailure() => ChoiceContextFailure(memory, moduleBase, roots, window) ??
+                    (!SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)) ? "game_session_changed" :
+                        !currentGeometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase)) ? "geometry_changed" : null);
+                bool SingleContext() => SingleContextFailure() is null;
                 bool SingleSelected() => StillActive() && ReadSingleSelectedAddress(memory, roots) == sources[sourceIndex].Address;
                 bool SkipConsumed()
                 {
@@ -893,11 +899,14 @@ static class GameSelection
                         }
                         var normal = memory.U32(roots.Ui + 0x214); var mode = memory.U32(roots.Ui + 0x1B4);
                         if (recoveryMode == 0 && mode != normal && SingleContext() && SingleSelected() && CursorAtClient(window, parkedPoint)) recoveryMode = mode;
-                        var observed = phase.Observe(clock.Elapsed, new(SingleContext() && CursorAtClient(window, parkedPoint),
+                        var stage = phase.Stage;
+                        var contextFailure = SingleContextFailure() ??
+                            (!CursorAtClient(window, parkedPoint) ? "cursor_position_changed" : null);
+                        var observed = phase.Observe(clock.Elapsed, new(contextFailure is null,
                             mode == normal ? ChoiceWispCommandMode.Normal : recoveryMode != 0 && mode == recoveryMode ? ChoiceWispCommandMode.OwnedMoveTarget : ChoiceWispCommandMode.Foreign,
                             true, true, SingleSelected()));
                         if (observed.Action == ChoiceWispWaitAction.MoveModeReady) break;
-                        if (observed.Action == ChoiceWispWaitAction.Stop) return WaitFailure(observed);
+                        if (observed.Action == ChoiceWispWaitAction.Stop) return WaitFailure(observed, contextFailure, stage);
                         await Task.Delay(ChoiceWispWaitPolicy.PollInterval, token);
                     }
                     var screen = MoveToClient(window, currentPoint.X, currentPoint.Y);
@@ -914,11 +923,14 @@ static class GameSelection
                         token.ThrowIfCancellationRequested();
                         if (!TrackSources(out var latest)) throw new IOException("recovery_source_identity_changed");
                         var normal = memory.U32(roots.Ui + 0x214); var mode = memory.U32(roots.Ui + 0x1B4);
-                        var observed = phase.Observe(clock.Elapsed, new(SingleContext() && CursorAtClient(window, parkedPoint),
+                        var stage = phase.Stage;
+                        var contextFailure = SingleContextFailure() ??
+                            (!CursorAtClient(window, parkedPoint) ? "cursor_position_changed" : null);
+                        var observed = phase.Observe(clock.Elapsed, new(contextFailure is null,
                             mode == normal ? ChoiceWispCommandMode.Normal : mode == recoveryMode ? ChoiceWispCommandMode.OwnedMoveTarget : ChoiceWispCommandMode.Foreign,
                             true, latest[sourceIndex].Active, false));
                         if (observed.Action is ChoiceWispWaitAction.MoveAccepted or ChoiceWispWaitAction.ConsumptionReady) { targeting = false; return null; }
-                        if (observed.Action == ChoiceWispWaitAction.Stop) return WaitFailure(observed);
+                        if (observed.Action == ChoiceWispWaitAction.Stop) return WaitFailure(observed, contextFailure, stage);
                         await Task.Delay(ChoiceWispWaitPolicy.PollInterval, token);
                     }
                 }
@@ -947,10 +959,12 @@ static class GameSelection
                 }
             }
 
-            ChoiceWispWaitObservation ReadWaitObservation(out GameChoiceInput.WispSample[] samples)
+            ChoiceWispWaitObservation ReadWaitObservation(out GameChoiceInput.WispSample[] samples, out string? contextFailure)
             {
-                var context = ChoiceContextValid(memory, moduleBase, roots, window) && CursorInViewport(window, geometry) &&
-                    geometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase));
+                contextFailure = ChoiceContextFailure(memory, moduleBase, roots, window) ??
+                    (!CursorInViewport(window, geometry) ? "cursor_outside_viewport" :
+                        !geometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase)) ? "geometry_changed" : null);
+                var context = contextFailure is null;
                 if (!context) cameraSession?.Abandon();
                 var normal = memory.U32(roots.Ui + 0x214);
                 var mode = memory.U32(roots.Ui + 0x1B4);
@@ -983,9 +997,10 @@ static class GameSelection
                     identity, active, selectedOnly, moving, arrived);
             }
 
-            string WaitFailure(ChoiceWispWaitDecision decision)
+            string WaitFailure(ChoiceWispWaitDecision decision, string? contextFailure = null, ChoiceWispWaitStage? observedStage = null)
             {
-                Console.WriteLine($"Choice observation stopped: count={count}, result={resultRawcode}, stage={decision.Stage}, reason={decision.Reason}.");
+                var detail = contextFailure is not null && decision.Reason == "input_context_changed" ? $", context={contextFailure}" : "";
+                Console.WriteLine($"Choice observation stopped: count={count}, result={resultRawcode}, stage={observedStage ?? decision.Stage}, reason={decision.Reason}{detail}.");
                 return decision.Reason switch
                 {
                     "move_mode_timeout" => "위습 이동 명령을 확인하지 못했습니다.",
@@ -1092,14 +1107,22 @@ static class GameSelection
             geometry.IsSafeCursor(current.X - origin.X, current.Y - origin.Y);
     }
 
+    private static string? ChoiceContextFailure(MemoryReader memory, uint moduleBase, Roots roots, IntPtr window)
+    {
+        if (GetForegroundWindow() != window) return "foreground_changed";
+        if (MouseOrModifiersHeld()) return "mouse_or_modifier_held";
+        if (!SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0))) return "game_session_changed";
+        if (memory.Read(moduleBase + 0xD04FEC, 1)[0] != 0) return "chat_open";
+        return null;
+    }
+
     private static bool ChoiceContextValid(MemoryReader memory, uint moduleBase, Roots roots, IntPtr window) =>
-        GetForegroundWindow() == window && !MouseOrModifiersHeld() &&
-        SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)) && memory.Read(moduleBase + 0xD04FEC, 1)[0] == 0;
+        ChoiceContextFailure(memory, moduleBase, roots, window) is null;
 
     private static bool ChoiceInputValid(MemoryReader memory, uint moduleBase, Roots roots, IntPtr window) =>
         ChoiceContextValid(memory, moduleBase, roots, window) && memory.U32(roots.Ui + 0x1B4) == memory.U32(roots.Ui + 0x214);
 
-    private static async Task ClickAsync(CancellationToken cancel)
+    private static async Task ClickAsync(CancellationToken cancel, bool waitForReleaseProcessing = true)
     {
         cancel.ThrowIfCancellationRequested();
         SendMouse([new() { Data = new() { Flags = 2 } }]);
@@ -1107,7 +1130,7 @@ static class GameSelection
         finally { SendMouse([new() { Data = new() { Flags = 4 } }]); }
         for (var attempt = 0; attempt < 5 && MouseOrModifiersHeld(); attempt++) await Task.Delay(10, cancel);
         // 게임이 버튼 해제를 처리하기 전에 커서를 다른 위치로 옮기지 않는다.
-        await Task.Delay(80, cancel);
+        if (waitForReleaseProcessing) await Task.Delay(80, cancel);
     }
 
     private static async Task<bool> PanToWorldAsync(MemoryReader memory, uint moduleBase, Roots roots,

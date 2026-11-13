@@ -1,3 +1,5 @@
+using System.Numerics;
+
 static class ChoiceWispBatchSelectionTests
 {
     public static void Run() => VerifyAsync().GetAwaiter().GetResult();
@@ -9,6 +11,22 @@ static class ChoiceWispBatchSelectionTests
         var before = new[] { Wisp(0x10000), Wisp(0x20000, 'B'), Wisp(0x30000, 'C') };
         var addresses = before.Select(unit => unit.Address).ToArray();
         var inactive = before.Select(unit => unit with { Flags5c = 0x100 }).ToArray();
+        var sourcePositions = new (uint Address, Vector3 Position)[]
+        {
+            (addresses[0], new(100, 0, 0)), (addresses[1], new(10, 0, 0)), (addresses[2], new(10, 0, 0))
+        };
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor(sourcePositions, [], Vector3.Zero, 3) == addresses[1],
+            "a batch can choose its closest owned source directly without selecting one first");
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor(sourcePositions, [addresses[0]], Vector3.Zero, 3) == addresses[0],
+            "an already selected owned wisp anchors a batch without another single-selection input");
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor(sourcePositions, [0x90000], Vector3.Zero, 3) == addresses[1],
+            "an unrelated selected body cannot become the source anchor");
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor(sourcePositions[..2], [], Vector3.Zero, 3) is null,
+            "an insufficient current source set cannot authorize batch positioning");
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor([sourcePositions[0], sourcePositions[0]], [], Vector3.Zero, 2) is null,
+            "duplicate source addresses cannot authorize batch positioning");
+        Check(ChoiceWispBatchSelectionPolicy.SourceAnchor([(addresses[0], new(float.NaN, 0, 0)), sourcePositions[1]], [], Vector3.Zero, 2) is null,
+            "unstable source geometry cannot authorize a batch anchor");
         Check(ChoiceWispBatchSelectionPolicy.Exact(addresses, before, 0, addresses[1]), "the exact three owned active sources can move together");
         Check(ChoiceWispBatchSelectionPolicy.Exact(addresses.Reverse().ToArray(), before, 0, addresses[0]), "native membership order does not change an exact group");
         Check(!ChoiceWispBatchSelectionPolicy.Exact(addresses[..2], before, 0), "fewer selected sources cannot authorize a partial group send");
