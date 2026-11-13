@@ -228,7 +228,9 @@ function create(catalog,combat,data,options={}){
   if(settings.includeMysteriousDecks===true)groups.add("mysterious");
   if(kingMode==="off"&&settings.includeMysteriousDecks!==true)groups.add("normal");
   const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)&&
-    (r.recommendationGroup==null||groups.has(r.recommendationGroup))),handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
+    (r.recommendationGroup==null||groups.has(r.recommendationGroup))&&
+    (options.requiredOwnedMaterialsAvailable?.(goalRows(r).filter(({entry})=>!isResidualGoalTier(entry)).map(({rawcode,entry})=>({rawcode,count:entryCount(entry)})),stock,settings.protectedCounts)??true)),
+    handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
   const selectable=usesHandFit?matching.filter(record=>{
    let value=null;
    try{
