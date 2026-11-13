@@ -134,6 +134,39 @@ static class GameChatSubmissionTests
             catch (IOException) { failed = true; }
             Check(failed && downs == 0 && ups == 0);
         });
+        await Test("unconfirmed Hangul toggle is retried once and stops on mode confirmation", async () =>
+        {
+            var toggles = 0; var waits = 0;
+            var stages = new List<string>();
+            await KoreanImeInput.SwitchToAlphanumericAsync(() => true, () => true,
+                _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(++waits == 2), default, stages.Add);
+            Check(toggles == 2 && waits == 2 && stages.SequenceEqual(["requesting_ime_alphanumeric", "retrying_ime_alphanumeric", "ime_alphanumeric_confirmed"]));
+        });
+        await Test("late IME transition prevents a second toggle", async () =>
+        {
+            var reads = 0; var toggles = 0;
+            await KoreanImeInput.SwitchToAlphanumericAsync(() => ++reads == 1, () => true,
+                _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(false), default);
+            Check(toggles == 1 && reads == 2);
+        });
+        await Test("IME retry is bounded and does not run with a held key or changed context", async () =>
+        {
+            foreach (var mode in new[] { "timeout", "held", "changed" })
+            {
+                var toggles = 0; var failed = false;
+                try
+                {
+                    await KoreanImeInput.SwitchToAlphanumericAsync(() =>
+                    {
+                        if (toggles > 0 && mode == "changed") throw new IOException("mock context changed");
+                        return true;
+                    }, () => toggles == 0 || mode != "held",
+                    _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(false), default);
+                }
+                catch (IOException) { failed = true; }
+                Check(failed && toggles == (mode == "timeout" ? 2 : 1));
+            }
+        });
         await Test("committed text survives an auxiliary IME restoration failure", async () =>
         {
             var releases = 0; var enters = 0;
