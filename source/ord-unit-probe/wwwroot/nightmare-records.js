@@ -8,8 +8,35 @@ const preservedFinalTiers=new Set(["초월","불멸","영원","제한","신비",
 const residualGoalTiers=new Set(["흔함","안흔함","특별","희귀"]),goalProjectionPolicy="exclude_low_tier_residual_final_goals";
 const goalTier=value=>{const tier=typeof value==="string"?value:value?.catalogTier??value?.tier??value?.sourceTier;return ({"특별함":"특별","희귀함":"희귀"})[tier]||tier;};
 const isResidualGoalTier=value=>residualGoalTiers.has(goalTier(value));
-const verifiedCount=entry=>entry?.countVerified===true&&entry.countMeaning==="verified_api_quantity"&&(entry.quantityEvidence||entry.evidence)?.sourceProvider==="tmo"&&(entry.quantityEvidence||entry.evidence)?.sourceCountVerified===true&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;
+const evidenceHash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value),nativeRunId=value=>typeof value==="string"&&/^auto-\d{8}T\d{13}Z-[a-f0-9]{16}$/.test(value);
+const verifiedNativeCount=entry=>{const proof=entry?.quantityEvidence;return entry?.countVerified===true&&entry.countMeaning==="verified_native_quantity"&&proof?.kind==="verified_native_last_active_quantity"&&proof.sourceProvider==="local-native"&&proof.sourceCountVerified===true&&nativeRunId(proof.canonicalRunId)&&evidenceHash(proof.automaticRunSha256)&&evidenceHash(proof.finalInventorySha256)&&evidenceHash(proof.catalogMapHash)&&proof.rawcode===entry.rawcode&&proof.count===entry.count&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;};
+const verifiedCount=entry=>verifiedNativeCount(entry)||entry?.countVerified===true&&entry.countMeaning==="verified_api_quantity"&&(entry.quantityEvidence||entry.evidence)?.sourceProvider==="tmo"&&(entry.quantityEvidence||entry.evidence)?.sourceCountVerified===true&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;
 const entryCount=entry=>verifiedCount(entry)?entry.count:1;
+function verifiedLocalSource(value,mapHash){
+ const proof=value?.localNativeProof,roster=list(proof?.roster),ids=value?.recordIds||value?.sourceRecordIds,urls=value?.urls||value?.sourceUrls;
+ if(value?.sourceProvider!=="local-native"||value.sourceOutcome!=="local_native_victory_confirmed"||proof?.schemaVersion!==1||proof.kind!=="verified_native_clear"||!nativeRunId(proof.canonicalRunId)||![proof.automaticRunSha256,proof.clearRecordSha256,proof.finalInventorySha256,proof.catalogMapHash].every(evidenceHash)||mapHash!==undefined&&proof.catalogMapHash!==mapHash||proof.nativeVictoryConfirmed!==true||proof.terminalRound!==65||!roster.length||!Array.isArray(ids)||ids.length!==1||ids[0]!=="local-"+proof.canonicalRunId||!Array.isArray(urls)||urls.length||value.sourceUrl!=null)return false;
+ const versions=value.versions||(value.version?[value.version]:[]);
+ if(typeof proof.versionNumber!=="string"||!/^\d+\.\d{3}$/.test(proof.versionNumber)||versions.length!==1||versions[0].number!==proof.versionNumber||versions[0].variant!==proof.variant||versions[0].numericVerified!==true||versions[0].sourceNumericVersionVerified!==true||versions[0].source!=="verified_native_loaded_map"||versions[0].assumedByUser===true||versions[0].datePolicyApplied===true)return false;
+ const terminal=Date.parse(proof.terminalObservedAt),active=Date.parse(proof.lastActiveObservedAt);
+ if(!Number.isFinite(terminal)||!Number.isFinite(active)||terminal<active||terminal-active>2000)return false;
+ const expected=new Map();for(const entry of roster){if(typeof entry?.rawcode!=="string"||!/^[A-Za-z0-9]{4}$/.test(entry.rawcode)||!Number.isSafeInteger(entry.count)||entry.count<1||entry.count>1000000||expected.has(entry.rawcode))return false;expected.set(entry.rawcode,entry.count);}
+ const entries=list(value.mapping||value.entries).filter(entry=>!["context_only","excluded_summon"].includes(entry.status)),actual=new Map();
+ for(const entry of entries){const quantity=entry.quantityEvidence;if(!verifiedNativeCount(entry)||quantity.canonicalRunId!==proof.canonicalRunId||quantity.automaticRunSha256!==proof.automaticRunSha256||quantity.finalInventorySha256!==proof.finalInventorySha256||quantity.catalogMapHash!==proof.catalogMapHash||actual.has(entry.rawcode))return false;actual.set(entry.rawcode,entry.count);}
+ return actual.size===expected.size&&Array.from(expected).every(([code,count])=>actual.get(code)===count);
+}
+function reviewedTraitAnchor(catalog,combat,rawcode){
+ const transformations=catalog?.progressTransformations,mapHash=catalog?.map?.sha256,scriptHash=combat?.map?.scriptSha256;
+ if(transformations?.schemaVersion!==1||transformations.sourceVerified!==true||!evidenceHash(mapHash)||combat?.map?.sha256!==mapHash||transformations.mapSha256!==mapHash||!evidenceHash(scriptHash)||transformations.jassSha256!==scriptHash||combat?.sources?.["war3map.j"]?.sha256!==scriptHash)return null;
+ const matches=list(transformations.entries).filter(entry=>entry.resultRawcode===rawcode);if(matches.length!==1)return null;
+ const entry=matches[0],review=entry.anchorRoleReview,source=entry.sourceRawcode,profile=combat.units?.[source],target=combat.units?.[rawcode],curated=combat.curatedStrategyProfiles?.units?.[source],role=profile?.damage?.reviewedAnchorRole;
+ if(entry.sourceVerified!==true||source===rawcode||typeof source!=="string"||!/^[A-Za-z0-9]{4}$/.test(source)||typeof rawcode!=="string"||!/^[A-Za-z0-9]{4}$/.test(rawcode)||!list(catalog.units).some(unit=>unit.rawcode===source&&unit.playable===true)||!list(catalog.units).some(unit=>unit.rawcode===rawcode&&unit.playable===true)||profile?.verified!==true||target?.verified!==true||profile.verificationKind!=="native"||target.verificationKind!=="native"||curated?.verificationKind!=="native"||curated.finalAnchorEligible!==true||!["lineDamage","bossDamage"].some(key=>curated[key]?.assessment==="main")||!["physicalDps","magicDps","hybridDps"].includes(role))return null;
+ const sourceReview=review?.sourceReview,identifier=value=>typeof value==="string"&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(value);
+ if(review?.sourceVerified!==true||review.roleOnly!==true||review.numericInheritance!==false||review.reviewedAnchorRole!==role||!identifier(review.sharedAttackFunction)||!identifier(review.sourceFunction)||!Number.isSafeInteger(review.sourceLine)||review.sourceLine<1||sourceReview?.type!=="script"||sourceReview.source!=="war3map.j"||!Array.isArray(sourceReview.lines)||sourceReview.lines.length!==2||!sourceReview.lines.every(line=>Number.isSafeInteger(line)&&line>0)||sourceReview.lines[0]>review.sourceLine||sourceReview.lines[1]<review.sourceLine||typeof sourceReview.quote!=="string")return null;
+ const codeHex=code=>Array.from(code).map(char=>char.charCodeAt(0).toString(16).padStart(2,"0")).join("").toUpperCase(),quote=sourceReview.quote;
+ if(!quote.includes("function "+review.sourceFunction+" takes")||!quote.includes("call w5($"+codeHex(source)+",function "+review.sharedAttackFunction+")")||!quote.includes("call w5($"+codeHex(rawcode)+",function "+review.sharedAttackFunction+")"))return null;
+ const types=new Set(list(target.damage?.explicitTypes));if(role==="magicDps"&&!types.has("magic")||role==="physicalDps"&&!types.has("physical")||role==="hybridDps"&&(!types.has("physical")||!types.has("magic")))return null;
+ return {role,sourceRawcode:source,review};
+}
 function finalGoalProjection(mapping){const excluded=new Map();for(const entry of list(mapping))if(isResidualGoalTier(entry)){const previous=excluded.get(entry.rawcode),count=entryCount(entry);if(!previous||count>previous.count)excluded.set(entry.rawcode,{rawcode:entry.rawcode,count,tier:goalTier(entry),reason:"lower_tier_residual"});}return {schemaVersion:1,policy:goalProjectionPolicy,excluded:Array.from(excluded.values()).sort((a,b)=>String(a.rawcode).localeCompare(String(b.rawcode))),sourceMappingPreserved:true,clearOutcomeTransferred:false};}
 const versionKey=value=>typeof value==="string"&&/^\d{1,4}\.\d{3}$/.test(value)?Number(value.split(".")[0])*1000+Number(value.split(".")[1]):null;
 const supportedSourceVersions=["2.321","2.322","2.323"],versionDeadlines=["2026-09-16T23:00:00+09:00","2026-09-24T23:00:00+09:00","2026-09-25T23:00:00+09:00"];
@@ -30,7 +57,7 @@ function originalClearTemplate(template){
  const evidence=template?.sourceEvidence;
  const provenance=template?.recordPresenceGoals===true&&typeof template.recordId==="string"&&template.id==="record-"+template.recordId&&
   !template.ownedUpgradeId&&evidence?.kind==="clear_record"&&evidence.compositionChanged!==true&&!list(evidence.replacements).length&&
-  validRecordIds(evidence.recordIds)&&validRecordUrls(evidence.urls);
+  validRecordIds(evidence.recordIds)&&(validRecordUrls(evidence.urls)||verifiedLocalSource(evidence));
  if(!provenance||!list(evidence.mapping).length)return false;
  const expected=new Map(),actual=new Map(),add=(map,rawcode,count)=>{if(typeof rawcode!=="string"||!Number.isSafeInteger(count)||count<1)return false;map.set(rawcode,Math.max(map.get(rawcode)||0,count));return true;};
  const projection=finalGoalProjection(evidence.mapping);
@@ -93,7 +120,9 @@ function create(catalog,combat,data,options={}){
  const families=new Map(list(data?.nativeFormFamilies).map(f=>[f.id,f]));
  const balance=Balance?.create(data?.balanceHistory,{catalogMapHash:catalog.map?.sha256,targetVersion:"2.323"});
  const stockOf=counts=>counts instanceof Map?new Map(counts):new Map(Object.entries(counts||{}));
- const mainRole=code=>curated[code]?.finalAnchorEligible===true&&["lineDamage","bossDamage"].some(k=>curated[code]?.[k]?.assessment==="main")?profiles[code]?.damage?.reviewedAnchorRole:null;
+  const randomOnly=code=>units.get(code)?.tier==="랜덤전용";
+  const traitRoles=new Map(),traitRole=code=>{if(!traitRoles.has(code))traitRoles.set(code,reviewedTraitAnchor(catalog,combat,code));return traitRoles.get(code);};
+  const mainRole=code=>(curated[code]?.finalAnchorEligible===true&&["lineDamage","bossDamage"].some(k=>curated[code]?.[k]?.assessment==="main")?profiles[code]?.damage?.reviewedAnchorRole:null)||traitRole(code)?.role||null;
  const ally=new Set(["ally","allies","allied","all_allies","team"]),enemy=new Set(["enemy","enemies","all_enemies","boss","boss_enemies","line_enemies"]);
  const native=code=>!temporaryUnits.has(code)&&profiles[code]?.verified===true&&profiles[code]?.verificationKind==="native";
  const eligible= (code,stock)=>!temporaryUnits.has(code)&&units.get(code)?.playable===true&&(!forbidden.has(code)||(stock.get(code)||0)>0)&&
@@ -163,8 +192,8 @@ function create(catalog,combat,data,options={}){
   return required.size>0&&numericalComparison(original,candidate)!==null;
  }
  function templates(counts,settings={}){
-  const stock=stockOf(counts),result=[],locked=[];
-  if(!compatible)return {templates:[],lockedRecords:[],compatible:false};
+   const stock=stockOf(counts),result=[],locked=[],missingRandomTemplates=[];
+   if(!compatible)return {templates:[],missingRandomTemplates:[],lockedRecords:[],compatible:false};
   const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)),handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
   const selectable=usesHandFit?matching.filter(record=>{let value=null;try{value=handFitAdvisor.preselectionScore(record,stock,settings);}catch{}if(value===-1)return false;affinities.set(record,typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=1?value:null);return true;}):matching;
   const legacy=selectable.filter(r=>r.sourceProvider!=="tmo"),live=selectable.filter(r=>r.sourceProvider==="tmo");
@@ -187,11 +216,12 @@ function create(catalog,combat,data,options={}){
   const preselection={policy:"owned_upper_overlap_and_direction_balanced_recent_records",eligibleRecords:matching.length,legacyRecordsPreserved:legacy.length,totalTmoRecords:live.length,selectedTmoRecords:selectedLive.length,liveLimit:limit,truncated:selectedLive.length<live.length,remainingEnemyCountUsed:false};
   if(usesHandFit)Object.assign(preselection,{policy:"owned_final_upper_then_material_affinity_and_direction_balanced_records",policyExcludedRecords:matching.length-selectable.length,materialScoredRecords:liveRanked.filter(item=>item.affinity!==null).length,materialUnknownRecords:liveRanked.filter(item=>item.affinity===null).length,unknownMaterialPolicy:"preserve_previous_rank_slots"});
   for(const record of [...legacy,...selectedLive]){
-   if(recordOnly&&(!validRecordIds(record.sourceRecordIds||[record.id])||!validRecordUrls(record.sourceUrls||[record.sourceUrl])||!["public_clear_submission_not_replayed","tmo_public_api_clear_flag_not_replayed"].includes(record.sourceOutcome))){locked.push({id:record.id,reasons:[{reason:"clear_record_provenance_missing"}]});continue;}
+    const currentMapVersion=String(catalog.map?.version||"").match(/^(\d+\.\d{3})(?:\[([^\]]+)\])?$/),localVerified=verifiedLocalSource(record,catalog.map?.sha256)&&record.localNativeProof.versionNumber===currentMapVersion?.[1]&&record.localNativeProof.variant===(currentMapVersion?.[2]||null),publicVerified=validRecordIds(record.sourceRecordIds||[record.id])&&validRecordUrls(record.sourceUrls||[record.sourceUrl])&&["public_clear_submission_not_replayed","tmo_public_api_clear_flag_not_replayed"].includes(record.sourceOutcome);
+    if(record.sourceProvider==="local-native"&&!localVerified||recordOnly&&!localVerified&&!publicVerified){locked.push({id:record.id,reasons:[{reason:"clear_record_provenance_missing"}]});continue;}
    const versionFacts=recordVersionFacts(record,{strictSource:recordOnly||minimumRecordVersion!==null}),evaluationVersion=versionFacts?.evaluationSourceVersion;
    if(!versionFacts){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"unverified_version"}]});continue;}
    if(minimumRecordVersion!==null&&versionKey(evaluationVersion)<minimumRecordVersion||recordOnly&&versionKey(evaluationVersion)>versionKey("2.323")){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"record_version_outside_supported_range"}]});continue;}
-   const resolved=[],unresolved=[];
+    const resolved=[],unresolved=[],missingRandomRequirements=[];
    for(const entry of record.entries){
     if(["context_only","excluded_summon"].includes(entry.status))continue;
     let rawcode=entry.rawcode,status=entry.status;
@@ -204,7 +234,8 @@ function create(catalog,combat,data,options={}){
     if(!rawcode){const owned=list(entry.candidateRawcodes).filter(c=>!temporaryUnits.has(c)&&(stock.get(c)||0)>0);if(owned.length===1){rawcode=owned[0];status="owned_candidate_form_unknown";}else{unresolved.push(entry);continue;}}
     if(temporaryUnits.has(rawcode))continue;
     if(!units.has(rawcode)){unresolved.push(entry);continue;}
-    if(forbidden.has(rawcode)&&(stock.get(rawcode)||0)<1){unresolved.push({...entry,reason:"unowned_random_source"});continue;}
+     if(randomOnly(rawcode)){const count=entryCount(entry),owned=Number.isSafeInteger(stock.get(rawcode))&&stock.get(rawcode)>0?stock.get(rawcode):0;if(owned<count)missingRandomRequirements.push({rawcode,count,owned,missing:count-owned});}
+     else if(forbidden.has(rawcode)&&(stock.get(rawcode)||0)<1){unresolved.push({...entry,reason:"unowned_random_source"});continue;}
     const upgrade=upgrades.find(u=>u.resultRawcode===rawcode);
     if(upgrade&&(stock.get(rawcode)||0)<1&&(stock.get(upgrade.sourceRawcode)||0)<1){unresolved.push({...entry,reason:"unowned_otherworld_source"});continue;}
     resolved.push({...entry,rawcode,status,catalogTier:units.get(rawcode).tier,formUnknown:entry.formUnknown||status==="owned_candidate_form_unknown"});
@@ -213,6 +244,11 @@ function create(catalog,combat,data,options={}){
    const finalEntries=resolved.filter(entry=>!isResidualGoalTier(entry)),goalProjection=finalGoalProjection(resolved);
    const goalCodes=unique(finalEntries.map(e=>e.rawcode)),goalCounts=new Map(goalCodes.map(code=>[code,Math.max(...finalEntries.filter(entry=>entry.rawcode===code).map(entryCount))])),unknownFormCodes=unique(finalEntries.filter(e=>e.formUnknown).flatMap(e=>[e.rawcode,...list(e.candidateRawcodes)]));
    if(recordOnly&&!goalCodes.length){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"no_original_registered_goals"}]});continue;}
+   // 등록된 일부 유닛의 클리어 표시는 최상위 없는 전체 덱의 증거가 아니다.
+   const completeNativeRoster=localVerified&&record.rosterComplete===true&&record.fullRosterCountsVerified===true;
+   // 레오는 전설 등급의 패왕의길 전용 주력이며, 선택 조건은 전략 계층에서 검사한다.
+   const hasFinalMain=goalCodes.some(actualUpper)||goalCodes.includes("h0C8")&&units.get("h0C8")?.playable===true;
+   if(!hasFinalMain&&!completeNativeRoster){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"partial_roster_without_final_unit"}]});continue;}
    const adjustment=balance?.assess(evaluationVersion,unique([...goalCodes,...unknownFormCodes]),{formUnknownRawcodes:unknownFormCodes})||{sourceVersion:evaluationVersion,targetVersion:"2.323",status:evaluationVersion==="2.323"?"current":"locked",lockReason:"history_unavailable",currentProfileReevaluation:true,clearEquivalenceVerified:false,changes:[],risks:[],riskRank:evaluationVersion==="2.323"?0:9,downsideCount:0,numericComparisons:[]};
    if(adjustment.status==="locked"){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:adjustment.lockReason||"history_unavailable"}],balanceAdjustment:adjustment});continue;}
    const targetVariant=String(catalog.map?.version||catalog.map?.title||"").match(/\[([RC])\]/)?.[1]||null;
@@ -224,16 +260,18 @@ function create(catalog,combat,data,options={}){
    if(versionFacts.datePolicyApplied){Object.assign(adjustment,{sourceVersion:null,evaluationSourceVersion:evaluationVersion,sourceNumericVersionVerified:false,datePolicyApplied:true,minimumPossibleVersion:versionFacts.minimumPossibleVersion,possibleSourceVersions:versionFacts.possibleSourceVersions,status:"historical_conditional",riskRank:Math.max(2,adjustment.riskRank)});adjustment.risks.push({kind:"date_based_source_version_range",minimumPossibleVersion:versionFacts.minimumPossibleVersion,possibleSourceVersions:versionFacts.possibleSourceVersions,exactSourceVersionVerified:false});}
    const physical=goalCodes.filter(c=>mainRole(c)==="physicalDps"),magic=goalCodes.filter(c=>mainRole(c)==="magicDps"),hybrid=goalCodes.filter(c=>mainRole(c)==="hybridDps");
    const mode=hybrid.length||physical.length&&magic.length?"hybrid":physical.length?"physical":magic.length?"magic":"unknown";
-   const dpsCodes=unique([...physical,...magic,...hybrid]);
+    const dpsCodes=unique([...physical,...magic,...hybrid]).filter(code=>!randomOnly(code));
    const preservedFinalCodes=goalCodes.filter(code=>preservedFinalTiers.has(units.get(code)?.tier)&&units.get(code)?.playable===true&&units.get(code)?.isSummon!==true&&!temporaryUnits.has(code)&&!finalMaterialProxies.has(code));
    const coreCodes=unique([...dpsCodes,...preservedFinalCodes]),title=goalCodes.slice(0,2).map(c=>units.get(c).displayName||units.get(c).name).join("·");
-   const evidence={kind:"clear_record",recordIds:record.sourceRecordIds||[record.id],urls:record.sourceUrls||[record.sourceUrl],versions:[record.version],cohort:record.cohort,sourceOutcome:record.sourceOutcome,sourceMapHashKnown:false,
-    rosterComplete:false,countMeaning:resolved.every(verifiedCount)?"verified_listed_api_quantities_not_full_roster":"minimum_registered_presence",exactCountsVerified:resolved.every(verifiedCount),fullRosterCountsVerified:false,recordVariantCompatibilityVerified:false,cohortEvidence:record.cohortEvidence||null,balanceAdjustment:adjustment,formUnknown:resolved.filter(e=>e.formUnknown).map(e=>({sourceName:e.sourceName,rawcode:e.rawcode,evidence:e.evidence})),mapping:resolved,goalProjection,remainingEnemyCountUsedForRanking:false};
+    const evidence={kind:"clear_record",recordIds:record.sourceRecordIds||[record.id],urls:record.sourceUrls||[record.sourceUrl],versions:[record.version],cohort:record.cohort,sourceOutcome:record.sourceOutcome,sourceProvider:record.sourceProvider||null,sourceMapHashKnown:localVerified,
+     rosterComplete:localVerified&&record.rosterComplete===true,countMeaning:localVerified?"verified_native_last_active_quantities":resolved.every(verifiedCount)?"verified_listed_api_quantities_not_full_roster":"minimum_registered_presence",exactCountsVerified:resolved.every(verifiedCount),fullRosterCountsVerified:localVerified&&record.fullRosterCountsVerified===true,recordVariantCompatibilityVerified:false,cohortEvidence:record.cohortEvidence||null,balanceAdjustment:adjustment,formUnknown:resolved.filter(e=>e.formUnknown).map(e=>({sourceName:e.sourceName,rawcode:e.rawcode,evidence:e.evidence})),mapping:resolved,goalProjection,randomOnlyRawcodes:goalCodes.filter(randomOnly),traitAnchorRoles:goalCodes.filter(code=>traitRole(code)).map(rawcode=>({rawcode,...traitRole(rawcode),numericInheritance:false})),remainingEnemyCountUsedForRanking:false,...(localVerified?{localNativeProof:record.localNativeProof}:{})};
    const historical=versionFacts.sourceNumericVersionVerified&&evaluationVersion!=="2.323",displayId=record.displayId||record.id,recordName=historical?"[2.323 보정] "+title+" #"+displayId+" · 원본"+record.version.number+(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):(evidence.formUnknown.length?"[기록기반] ":"[클리어기록] ")+title+" #"+displayId+(versionFacts.sourceNumericVersionVerified?(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):"");
-   result.push({id:"record-"+record.id,name:recordName,direction:mode,
+    const template={id:"record-"+record.id,name:recordName,direction:mode,
     coreRawcodes:coreCodes,coreGoals:coreCodes.map(rawcode=>({rawcode,count:goalCounts.get(rawcode)})),coreComposition:{kind:"registered_record_presence",dpsRawcodes:dpsCodes,actualDpsCoreCount:dpsCodes.length,minimumDpsCoreCount:0},
     supportSlots:goalCodes.filter(c=>!coreCodes.includes(c)).map((c,i)=>({id:"registered-"+i,roles:[],preferredRawcodes:[c],alternatives:[],count:goalCounts.get(c),required:true})),
-    requiredCoverage:[],recordPresenceGoals:true,sourceEvidence:evidence,source:evidence,evidenceScope:"registered_roster_presence_not_full_clear_validation",conditions:[],recordId:record.id});
+     requiredCoverage:[],recordPresenceGoals:true,sourceEvidence:evidence,source:evidence,evidenceScope:"registered_roster_presence_not_full_clear_validation",conditions:[],recordId:record.id};
+    if(missingRandomRequirements.length){template.missingRandomRequirements=missingRandomRequirements;missingRandomTemplates.push(template);locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:missingRandomRequirements.map(entry=>({...entry,reason:"unowned_random_source"}))});}
+    else result.push(template);
   }
   const alternatives=[];
   if(generateAlternatives)for(const base of result){
@@ -253,9 +291,9 @@ function create(catalog,combat,data,options={}){
      supportSlots:base.supportSlots.map(s=>({...s,preferredRawcodes:s.preferredRawcodes.map(c=>c===change.original?change.candidate:c)})),source:evidence,sourceEvidence:evidence});
    }
   }
-  return {templates:result,alternatives,lockedRecords:locked,compatible:true,preselection};
+  return {templates:result,missingRandomTemplates,alternatives,lockedRecords:locked,compatible:true,preselection};
  }
  return {templates,compatible};
 }
-return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection};
+return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection,verifiedLocalSource,reviewedTraitAnchor};
 });

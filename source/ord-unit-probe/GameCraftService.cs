@@ -49,6 +49,8 @@ sealed class GameCraftService
             catalogHash = catalog.RootElement.GetProperty("map").GetProperty("sha256").GetString() ?? "";
             if (catalogHash.Length != 64 || !catalogHash.All(Uri.IsHexDigit))
                 throw new InvalidDataException("Invalid map digest.");
+            if (aliases.RootElement.GetProperty("mapSha256").GetString() != catalogHash)
+                throw new InvalidDataException("Chat aliases and recipes belong to different maps.");
             foreach (var unit in catalog.RootElement.GetProperty("units").EnumerateArray())
                 if (unit.GetProperty("playable").GetBoolean())
                     characterRawcodes.Add(RequiredRawcode(unit, "rawcode"));

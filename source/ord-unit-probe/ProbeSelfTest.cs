@@ -101,7 +101,16 @@ static class ProbeSelfTest
             Check(active.Length == 2 && active.All(u => u.Rawcode != "hfoo") && active.Count(u => u.Rawcode == "H000") == 1,
                 "dead ingredients disappear from active quantities while result appears");
             Check(UnitRules.IsCharacterLabel("루피 - 흔함") && UnitRules.IsCharacterLabel("징베 - 초월") &&
-                !UnitRules.IsCharacterLabel("연구소"), "character catalog labels exclude infrastructure");
+                new[] { "왜곡", "신비", "랜덤전용", "세라핌", "특수" }.All(tier => UnitRules.IsCharacterLabel("테스트 - " + tier)) &&
+                !UnitRules.IsCharacterLabel("연구소"), "all current tier labels include infrastructure exclusion");
+            var mapCatalogPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "data", "map-catalog.json");
+            using var mapCatalog = JsonDocument.Parse(File.ReadAllText(mapCatalogPath));
+            var mapUnits = mapCatalog.RootElement.GetProperty("units").EnumerateArray().ToArray();
+            JsonElement MapUnit(string code) => mapUnits.Single(unit => unit.GetProperty("rawcode").GetString() == code);
+            Check(new[] { "h09R", "h0CI", "h06T", "h0A3", "H0BK" }.All(code => UnitRules.IsCharacterCatalogUnit(MapUnit(code))),
+                "same-map playable metadata includes newer tiers and tier names without suffixes");
+            Check(new[] { "h060", "h06G", "h0AN" }.All(code => !UnitRules.IsCharacterCatalogUnit(MapUnit(code))),
+                "same-map other-tier ships, resources and markers stay outside the character roster");
             Check(GameSelection.ReadSingleSelectedAddress(reader, afterRoots) is null,
                 "a selected ingredient becomes invalid after consumption");
             Check(!GameSelection.CurrentOwnedUnit(reader, afterRoots, fixture.FirstUnitAddress, "hfoo"),

@@ -11,6 +11,7 @@
   const ratio = plan => plan.cost > 0 ? Math.max(0, Math.min(1, 1 - plan.missingCost / plan.cost)) : 0;
   const percentage = plan => ratio(plan) >= 1 ? 100 : Math.min(99,Math.round(ratio(plan)*100));
   function isProductionRecipe(recipe) {
+    if (recipe?.progressOnly === true) return false;
     if (!unitsOf(recipe).size && (recipe.ingredients||[]).some(item=>String(item.type).toUpperCase()==="RDUN"&&item.rawcode==="A800")) return false;
     if ((recipe.ingredients||[]).length || !(recipe.upgradeRoutes||[]).length) return true;
     // UPUN 관계만 있는 빈 등록은 생성 명령이 아니다. 실제 능력·시전자·입력 근거가 있으면 유지한다.
@@ -161,6 +162,24 @@
     for (const list of recipes.values()) list.sort((a,b) => String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
     for (const list of parents.values()) for (const edge of list.values()) if (!edge.recipeIds.length)
       edge.recipeIds = (recipes.get(edge.rawcode) || []).map(recipe => String(recipe.id));
+    // 특성 강화 변신은 재료 진행도에만 연결한다. 실제 조합·선택 가능 경로에는 추가하지 않는다.
+    const progressRecipes = new Map(recipes);
+    const transforms = catalog.progressTransformations;
+    if (transforms?.schemaVersion === 1 && transforms.sourceVerified === true &&
+        typeof catalogHash === "string" && /^[a-f0-9]{64}$/i.test(catalogHash) && transforms.mapSha256 === catalogHash &&
+        typeof transforms.jassSha256 === "string" && /^[a-f0-9]{64}$/i.test(transforms.jassSha256) && Array.isArray(transforms.entries)) {
+      const targets = new Set();
+      for (const entry of transforms.entries) {
+        if (entry?.sourceVerified !== true || entry.sourceRawcode === entry.resultRawcode ||
+            !units.has(entry.sourceRawcode) || !units.has(entry.resultRawcode) ||
+            !Number.isSafeInteger(entry.skillPointCost) || entry.skillPointCost < 1 || entry.skillPointCost > 1000000 ||
+            targets.has(entry.resultRawcode) || (recipes.get(entry.resultRawcode) || []).some(isProductionRecipe)) continue;
+        targets.add(entry.resultRawcode);
+        progressRecipes.set(entry.resultRawcode,[{id:"progress:trait:"+entry.resultRawcode,resultUnitRawcode:entry.resultRawcode,
+          resultCount:1,progressOnly:true,ingredients:[{type:"UNIT",rawcode:entry.sourceRawcode,count:1},
+            {type:"SKPT",rawcode:"SKPT",name:"특성 포인트",count:entry.skillPointCost}]}]);
+      }
+    }
     function empty() { return {cost:0,missingCost:0,leaves:new Map(),missingLeaves:new Map(),conditions:[],rows:[],warnings:new Set()}; }
     function combine(target, part) {
       target.cost += part.cost; target.missingCost += part.missingCost;
@@ -172,7 +191,7 @@
     function nominal(code, count, path, depth) {
       const result = empty();
       if (!count) return result;
-      const list = recipes.get(code);
+      const list = progressRecipes.get(code);
       if (!list || !list.length || path.has(code) || depth > 64) {
         result.cost = count; add(result.leaves,code,count);
         if (path.has(code) || depth > 64) result.warnings.add("recipe_cycle:" + code);
@@ -197,7 +216,7 @@
     }
     function demand(code, need, stock, path, depth, reserved,materialInventory) {
       const owned = reserved === undefined ? take(stock,code,need) : reserved;
-      const missing = need - owned, list = recipes.get(code);
+      const missing = need - owned, list = progressRecipes.get(code);
       if (!list || !list.length || path.has(code) || depth > 64) return leaf(code,need,owned,path.has(code) || depth > 64 ? "recipe_cycle:"+code : null);
       const credit = nominal(code,owned,path,depth);
       if (!missing) return credit;
@@ -423,7 +442,7 @@
       if (recipeId && typeof recipeId === "object") { options = recipeId; recipeId = null; }
       options = options || {};
       options={...options,recipeConditions:scopedConditions(options.recipeConditions)};
-      const stock = stockOf(counts), list = recipes.get(code) || [];
+      const stock = stockOf(counts), list = progressRecipes.get(code) || [];
       const matching = (recipeId == null ? list : list.filter(recipe => String(recipe.id) === String(recipeId))).filter(recipe=>matchesMaterialChoice(recipe,options));
       let best = null;
       for (const recipe of matching) {
@@ -457,18 +476,21 @@
       const {itemRequirements,missingItems,itemsReady}=evaluateItems(plan.conditions,options.items);
       const materialChoiceAmbiguous=warnings.has("ambiguous_material_choice")||warnings.has("invalid_material_choice");
       const readiness=resourcesReady&&itemsReady&&!materialChoiceAmbiguous&&!conditionState.missingConditions.some(item=>specialTypes.has(item.type));
-      // 필요한 화폐 종류마다 최대 5%만 배정하고, 나머지는 유닛 재료 진척률로 표시한다.
+      // 특성 포인트는 전체의 5%, 나머지는 기존 유닛·화폐·아이템 비율을 유지한다.
       // 경로는 기존 재귀 UNIT 선택 정책을 유지하며 그 선택 경로의 실제 제작 비용만 합산한다.
       const moneyOnly = plan.cost===0 && (resourceRequirements.length>0||itemRequirements.length>0) && plan.conditions.every(item=>["GOLD","WOOD","ITEM"].includes(String(item.type).toUpperCase()));
       const unitProgress = moneyOnly ? 1 : ratio(plan);
-      const currencyWeights = Object.fromEntries(resourceRequirements.map(item=>[item.type,.05]));
-      const itemWeight=itemRequirements.length?.05:0;
-      const unitWeight = 1-resourceRequirements.length*.05-itemWeight;
-      const progressWeighting = {unitWeight,currencyWeights,itemWeight,policy:"unit_progress_with_capped_currency_weights"};
+      const skillRequirement=conditionState.conditionRequirements.find(item=>item.type==="SKPT");
+      const skillWeight=skillRequirement?.count>0 ? .05 : 0,baseWeight=1-skillWeight;
+      const skillRatio=skillRequirement?.known?Math.min(1,Math.max(0,skillRequirement.have/skillRequirement.count)):0;
+      const currencyWeights = Object.fromEntries(resourceRequirements.map(item=>[item.type,.05*baseWeight]));
+      const itemWeight=itemRequirements.length?.05*baseWeight:0;
+      const unitWeight = baseWeight-resourceRequirements.length*.05*baseWeight-itemWeight;
+      const progressWeighting = {unitWeight,currencyWeights,itemWeight,...(skillWeight?{conditionWeights:{SKPT:skillWeight}}:{}),policy:"unit_progress_with_capped_currency_weights"};
       const currencyContribution = resourceRequirements.reduce((sum,item)=>sum+(item.known ? Math.min(1,item.have/item.count) : 0)*currencyWeights[item.type],0);
       const itemTotal=itemRequirements.reduce((sum,item)=>sum+item.count,0);
       const itemRatio=itemTotal?itemRequirements.reduce((sum,item)=>sum+(item.known?Math.min(item.count,item.have):0),0)/itemTotal:1;
-      const weightedProgress = unit => Math.max(0,Math.min(1,unit*unitWeight+currencyContribution+itemRatio*itemWeight));
+      const weightedProgress = unit => Math.max(0,Math.min(1,unit*unitWeight+currencyContribution+itemRatio*itemWeight+skillRatio*skillWeight));
       const unitComplete = moneyOnly || plan.cost>0 && plan.missingCost===0;
       let progress = weightedProgress(unitProgress);
       if ((!unitComplete || !readiness) && progress>=1) progress=1-Number.EPSILON;

@@ -700,7 +700,7 @@ static class GameCraftSequenceTests
                 Recipe("r011", "g009", new CraftIngredient("h003", 64))
             }
         }));
-        File.WriteAllText(aliases, "{\"recipes\":[]}");
+        File.WriteAllText(aliases, JsonSerializer.Serialize(new { mapSha256 = Hash, recipes = Array.Empty<object>() }));
     }
 
     private static string Status(JsonElement result) => result.GetProperty("status").GetString()!;
