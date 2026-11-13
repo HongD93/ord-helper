@@ -9,6 +9,9 @@ const residualGoalTiers=new Set(["흔함","안흔함","특별","희귀"]),goalPr
 const goalTier=value=>{const tier=typeof value==="string"?value:value?.catalogTier??value?.tier??value?.sourceTier;return ({"특별함":"특별","희귀함":"희귀"})[tier]||tier;};
 const isResidualGoalTier=value=>residualGoalTiers.has(goalTier(value));
 const evidenceHash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value),nativeRunId=value=>typeof value==="string"&&/^auto-\d{8}T\d{13}Z-[a-f0-9]{16}$/.test(value);
+const historicalProjection=(data,catalog)=>data?.schemaVersion===1&&data.projection?.kind==="historical_roster_identity"&&
+ evidenceHash(data.catalogMapHash)&&data.catalogMapHash===catalog?.map?.sha256&&
+ evidenceHash(data.projection.sourceMapHash)&&data.projection.sourceMapHash!==data.catalogMapHash&&evidenceHash(data.projection.sourceRevision);
 const verifiedNativeCount=entry=>{const proof=entry?.quantityEvidence;return entry?.countVerified===true&&entry.countMeaning==="verified_native_quantity"&&proof?.kind==="verified_native_last_active_quantity"&&proof.sourceProvider==="local-native"&&proof.sourceCountVerified===true&&nativeRunId(proof.canonicalRunId)&&evidenceHash(proof.automaticRunSha256)&&evidenceHash(proof.finalInventorySha256)&&evidenceHash(proof.catalogMapHash)&&proof.rawcode===entry.rawcode&&proof.count===entry.count&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;};
 const verifiedCount=entry=>verifiedNativeCount(entry)||entry?.countVerified===true&&entry.countMeaning==="verified_api_quantity"&&(entry.quantityEvidence||entry.evidence)?.sourceProvider==="tmo"&&(entry.quantityEvidence||entry.evidence)?.sourceCountVerified===true&&Number.isSafeInteger(entry.count)&&entry.count>0&&entry.count<=1000000;
 const entryCount=entry=>verifiedCount(entry)?entry.count:1;
@@ -116,9 +119,11 @@ function create(catalog,combat,data,options={}){
  const recordOnly=options.recordOnly===true,generateAlternatives=!recordOnly&&options.generateAlternatives!==false;
  const requestedMinimum=versionKey(options.minRecordVersion),minimumRecordVersion=recordOnly?Math.max(versionKey("2.321"),requestedMinimum||0):requestedMinimum;
  const compatible=Boolean(data&&data.catalogMapHash===catalog.map?.sha256),units=new Map(list(catalog.units).map(u=>[u.rawcode,u])),profiles=combat.units||{},curated=combat.curatedStrategyProfiles?.units||{};
+ const historical=historicalProjection(data,catalog);
+ const targetVersion=String(catalog.map?.version||"").match(/^\d+\.\d{3}/)?.[0]||"2.323";
  const forbidden=new Set([...temporaryUnits,...list(combat.acquisitionModel?.nonForecastableRawcodes)]),upgrades=list(combat.curatedStrategyProfiles?.ownedSourceUpgrades);
  const families=new Map(list(data?.nativeFormFamilies).map(f=>[f.id,f]));
- const balance=Balance?.create(data?.balanceHistory,{catalogMapHash:catalog.map?.sha256,targetVersion:"2.323"});
+ const balance=Balance?.create(data?.balanceHistory,{catalogMapHash:catalog.map?.sha256,targetVersion});
  const stockOf=counts=>counts instanceof Map?new Map(counts):new Map(Object.entries(counts||{}));
   const randomOnly=code=>units.get(code)?.tier==="랜덤전용";
   const traitRoles=new Map(),traitRole=code=>{if(!traitRoles.has(code))traitRoles.set(code,reviewedTraitAnchor(catalog,combat,code));return traitRoles.get(code);};
@@ -216,11 +221,15 @@ function create(catalog,combat,data,options={}){
   const preselection={policy:"owned_upper_overlap_and_direction_balanced_recent_records",eligibleRecords:matching.length,legacyRecordsPreserved:legacy.length,totalTmoRecords:live.length,selectedTmoRecords:selectedLive.length,liveLimit:limit,truncated:selectedLive.length<live.length,remainingEnemyCountUsed:false};
   if(usesHandFit)Object.assign(preselection,{policy:"owned_final_upper_then_material_affinity_and_direction_balanced_records",policyExcludedRecords:matching.length-selectable.length,materialScoredRecords:liveRanked.filter(item=>item.affinity!==null).length,materialUnknownRecords:liveRanked.filter(item=>item.affinity===null).length,unknownMaterialPolicy:"preserve_previous_rank_slots"});
   for(const record of [...legacy,...selectedLive]){
-    const currentMapVersion=String(catalog.map?.version||"").match(/^(\d+\.\d{3})(?:\[([^\]]+)\])?$/),localVerified=verifiedLocalSource(record,catalog.map?.sha256)&&record.localNativeProof.versionNumber===currentMapVersion?.[1]&&record.localNativeProof.variant===(currentMapVersion?.[2]||null),publicVerified=validRecordIds(record.sourceRecordIds||[record.id])&&validRecordUrls(record.sourceUrls||[record.sourceUrl])&&["public_clear_submission_not_replayed","tmo_public_api_clear_flag_not_replayed"].includes(record.sourceOutcome);
+    const currentMapVersion=String(catalog.map?.version||"").match(/^(\d+\.\d{3})(?:\[([^\]]+)\])?$/);
+    const previousMapRecord=historical&&record.historicalSourceMapHash===data.projection.sourceMapHash;
+    const localVerified=previousMapRecord?verifiedLocalSource(record,data.projection.sourceMapHash):
+     verifiedLocalSource(record,catalog.map?.sha256)&&record.localNativeProof.versionNumber===currentMapVersion?.[1]&&record.localNativeProof.variant===(currentMapVersion?.[2]||null);
+    const publicVerified=validRecordIds(record.sourceRecordIds||[record.id])&&validRecordUrls(record.sourceUrls||[record.sourceUrl])&&["public_clear_submission_not_replayed","tmo_public_api_clear_flag_not_replayed"].includes(record.sourceOutcome);
     if(record.sourceProvider==="local-native"&&!localVerified||recordOnly&&!localVerified&&!publicVerified){locked.push({id:record.id,reasons:[{reason:"clear_record_provenance_missing"}]});continue;}
    const versionFacts=recordVersionFacts(record,{strictSource:recordOnly||minimumRecordVersion!==null}),evaluationVersion=versionFacts?.evaluationSourceVersion;
    if(!versionFacts){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"unverified_version"}]});continue;}
-   if(minimumRecordVersion!==null&&versionKey(evaluationVersion)<minimumRecordVersion||recordOnly&&versionKey(evaluationVersion)>versionKey("2.323")){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"record_version_outside_supported_range"}]});continue;}
+   if(minimumRecordVersion!==null&&versionKey(evaluationVersion)<minimumRecordVersion||recordOnly&&versionKey(evaluationVersion)>versionKey(targetVersion)){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"record_version_outside_supported_range"}]});continue;}
     const resolved=[],unresolved=[],missingRandomRequirements=[];
    for(const entry of record.entries){
     if(["context_only","excluded_summon"].includes(entry.status))continue;
@@ -249,11 +258,12 @@ function create(catalog,combat,data,options={}){
    // 레오는 전설 등급의 패왕의길 전용 주력이며, 선택 조건은 전략 계층에서 검사한다.
    const hasFinalMain=goalCodes.some(actualUpper)||goalCodes.includes("h0C8")&&units.get("h0C8")?.playable===true;
    if(!hasFinalMain&&!completeNativeRoster){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:"partial_roster_without_final_unit"}]});continue;}
-   const adjustment=balance?.assess(evaluationVersion,unique([...goalCodes,...unknownFormCodes]),{formUnknownRawcodes:unknownFormCodes})||{sourceVersion:evaluationVersion,targetVersion:"2.323",status:evaluationVersion==="2.323"?"current":"locked",lockReason:"history_unavailable",currentProfileReevaluation:true,clearEquivalenceVerified:false,changes:[],risks:[],riskRank:evaluationVersion==="2.323"?0:9,downsideCount:0,numericComparisons:[]};
+   const adjustment=previousMapRecord?{sourceVersion:evaluationVersion,targetVersion,status:"historical_conditional",currentProfileReevaluation:false,clearEquivalenceVerified:false,changes:[],risks:[{kind:"historical_composition_only"}],riskRank:2,downsideCount:0,numericComparisons:[]}:
+    balance?.assess(evaluationVersion,unique([...goalCodes,...unknownFormCodes]),{formUnknownRawcodes:unknownFormCodes})||{sourceVersion:evaluationVersion,targetVersion,status:evaluationVersion===targetVersion?"current":"locked",lockReason:"history_unavailable",currentProfileReevaluation:!historical,clearEquivalenceVerified:false,changes:[],risks:[],riskRank:evaluationVersion===targetVersion?0:9,downsideCount:0,numericComparisons:[]};
    if(adjustment.status==="locked"){locked.push({id:record.id,sourceUrl:record.sourceUrl,reasons:[{reason:adjustment.lockReason||"history_unavailable"}],balanceAdjustment:adjustment});continue;}
    const targetVariant=String(catalog.map?.version||catalog.map?.title||"").match(/\[([RC])\]/)?.[1]||null;
    adjustment.variantCompatibility={sourceVariant:record.version.variant||null,targetVariant,verified:false};
-   if(evaluationVersion!=="2.323"&&(!record.version.variant||!targetVariant||record.version.variant!==targetVariant)){
+   if(evaluationVersion!==targetVersion&&(!record.version.variant||!targetVariant||record.version.variant!==targetVariant)){
     adjustment.risks.push({kind:"variant_equivalence_unverified",message:"원본 기록과 현재 맵의 R/C 성능 동등성을 확인하지 않았습니다.",sourceVariant:record.version.variant||null,targetVariant});
     adjustment.riskRank=Math.max(2,adjustment.riskRank);adjustment.status="historical_conditional";
    }
@@ -265,7 +275,9 @@ function create(catalog,combat,data,options={}){
    const coreCodes=unique([...dpsCodes,...preservedFinalCodes]),title=goalCodes.slice(0,2).map(c=>units.get(c).displayName||units.get(c).name).join("·");
     const evidence={kind:"clear_record",recordIds:record.sourceRecordIds||[record.id],urls:record.sourceUrls||[record.sourceUrl],versions:[record.version],cohort:record.cohort,sourceOutcome:record.sourceOutcome,sourceProvider:record.sourceProvider||null,sourceMapHashKnown:localVerified,
      rosterComplete:localVerified&&record.rosterComplete===true,countMeaning:localVerified?"verified_native_last_active_quantities":resolved.every(verifiedCount)?"verified_listed_api_quantities_not_full_roster":"minimum_registered_presence",exactCountsVerified:resolved.every(verifiedCount),fullRosterCountsVerified:localVerified&&record.fullRosterCountsVerified===true,recordVariantCompatibilityVerified:false,cohortEvidence:record.cohortEvidence||null,balanceAdjustment:adjustment,formUnknown:resolved.filter(e=>e.formUnknown).map(e=>({sourceName:e.sourceName,rawcode:e.rawcode,evidence:e.evidence})),mapping:resolved,goalProjection,randomOnlyRawcodes:goalCodes.filter(randomOnly),traitAnchorRoles:goalCodes.filter(code=>traitRole(code)).map(rawcode=>({rawcode,...traitRole(rawcode),numericInheritance:false})),remainingEnemyCountUsedForRanking:false,...(localVerified?{localNativeProof:record.localNativeProof}:{})};
-   const historical=versionFacts.sourceNumericVersionVerified&&evaluationVersion!=="2.323",displayId=record.displayId||record.id,recordName=historical?"[2.323 보정] "+title+" #"+displayId+" · 원본"+record.version.number+(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):(evidence.formUnknown.length?"[기록기반] ":"[클리어기록] ")+title+" #"+displayId+(versionFacts.sourceNumericVersionVerified?(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):"");
+   const displayId=record.displayId||record.id;
+   const recordName=previousMapRecord?"[이전 맵 기록] "+title+" #"+displayId:
+    versionFacts.sourceNumericVersionVerified&&evaluationVersion!==targetVersion?"["+targetVersion+" 보정] "+title+" #"+displayId+" · 원본"+record.version.number+(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):(evidence.formUnknown.length?"[기록기반] ":"[클리어기록] ")+title+" #"+displayId+(versionFacts.sourceNumericVersionVerified?(record.version.variant?"["+record.version.variant+"]":"[R/C미확인]"):"");
     const template={id:"record-"+record.id,name:recordName,direction:mode,
     coreRawcodes:coreCodes,coreGoals:coreCodes.map(rawcode=>({rawcode,count:goalCounts.get(rawcode)})),coreComposition:{kind:"registered_record_presence",dpsRawcodes:dpsCodes,actualDpsCoreCount:dpsCodes.length,minimumDpsCoreCount:0},
     supportSlots:goalCodes.filter(c=>!coreCodes.includes(c)).map((c,i)=>({id:"registered-"+i,roles:[],preferredRawcodes:[c],alternatives:[],count:goalCounts.get(c),required:true})),
@@ -295,5 +307,5 @@ function create(catalog,combat,data,options={}){
  }
  return {templates,compatible};
 }
-return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection,verifiedLocalSource,reviewedTraitAnchor};
+return {normalize,create,aliases,originalClearTemplate,recordVersionFacts,isResidualGoalTier,finalGoalProjection,verifiedLocalSource,reviewedTraitAnchor,historicalProjection};
 });

@@ -41,7 +41,7 @@
     let timer = null, timeout = null, pending = null, result = null, failed = false, destroyed = false;
     let firstInvestment = null, investmentBaseline = null, investmentAmbiguous = false, starterPhaseSeen = false, manualDeckChoice = false, manualDeckChoiceRevision = 0, lastSemanticKey = "", lastBudget = null, blockingRecompute = true, resourceRefreshPending = false;
     let activeRecordsRevision=null,pendingRecordsSnapshot=null,recordUpdateInFlight=null,recordAckTimeout=null,recordPollTimer=null,recordFetchAbort=null,recordFetchBusy=false;
-    let baseRecordIds=[],recommendInFlight=null;
+    let baseRecordIds=[],recommendInFlight=null,historicalRecords=null;
     let publicRecordsData=null,publicRecordsRevision=null,localRecordsData=null,localRecordsRevision=null;
     let reinforcementRole="auto";
     function validLiveRecords(data,manifest,requireBase=true){
@@ -105,7 +105,7 @@
       }catch{}finally{clearTimeout(abortTimer);recordFetchBusy=false;if(recordFetchAbort===controller)recordFetchAbort=null;}
     }
     function startRecordPolling(){
-      if(recordPollTimer||!clearRecords||!state?.catalog||!root.crypto?.subtle||typeof AbortController==="undefined")return;
+      if(recordPollTimer||!state?.catalog||clearRecords?.catalogMapHash!==state.catalog.map?.sha256||!root.crypto?.subtle||typeof AbortController==="undefined")return;
       recordPollTimer=setInterval(pollLiveRecords,20000);pollLiveRecords();
     }
     const panel = root.OrdNightmarePanel.create({
@@ -188,7 +188,13 @@
     function initialize() {
       if (!combat || !mechanics || !clearRecords || !state?.catalog || destroyed) return false;
       const hash = state.catalog.map?.sha256;
-      if (combat.map?.sha256 !== hash || mechanics.map?.sha256 !== hash || clearRecords.catalogMapHash !== hash) {
+      const nativeData=combat.map?.sha256===hash&&mechanics.map?.sha256===hash&&clearRecords.catalogMapHash===hash;
+      if(!nativeData&&historicalRecords?.catalogMapHash===hash&&historicalRecords.projection?.kind==="historical_roster_identity"&&clearRecords.catalogMapHash!==hash){
+        clearRecords=publicRecordsData=historicalRecords;
+        baseRecordIds=historicalRecords.records.map(record=>record.id);
+        activeRecordsRevision=publicRecordsRevision=null;
+      }
+      if (!nativeData && (clearRecords.catalogMapHash!==hash||clearRecords.projection?.kind!=="historical_roster_identity")) {
         failed = true; pending = null; result = null;
         show("현재 맵에서 추천을 사용할 수 없어요."); return false;
       }
@@ -241,11 +247,13 @@
         stopWorker(); pending = null; result = null; failed = true;
         show("추천을 불러오지 못했어요. 다시 계산해 주세요.");
       };
-      try { worker.postMessage({type:"init", catalog:state.catalog, combat,rules:mechanics,clearRecords,randomDrops,combatValidation,storyRankings,recordsRevision:activeRecordsRevision}); }
+      try { worker.postMessage({type:"init", catalog:state.catalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,
+        ...(nativeData?{randomDrops,combatValidation,storyRankings}:{}),recordsRevision:activeRecordsRevision}); }
       catch {
         stopWorker(); pending = null; result = null; failed = true;
         show("추천을 불러오지 못했어요. 다시 계산해 주세요."); return false;
       }
+      startRecordPolling();
       timeout = setTimeout(() => {
         stopWorker(); pending = null; result = null; failed = true;
         show("추천 정보를 불러오는 데 오래 걸리고 있어요. 다시 계산해 주세요.");
@@ -362,8 +370,9 @@
       loading = true; show();
       Promise.all(["/data/nightmare-combat.json","/data/nightmare-rules.json","/data/nightmare-clear-records.json"].map(url=>
         fetch(url,{cache:"no-store"}).then(response=>{if(!response.ok)throw new Error("combat_profile_unavailable");return response.json();})
-      ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData]) => {
+      ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history]) => {
         if (destroyed) return;
+        historicalRecords=history?.schemaVersion===1&&Array.isArray(history.records)&&history.records.length?history:null;
         loading = false; combat = data; mechanics=rules;if(!publicRecordsData||publicRecordsData.catalogMapHash!==records.catalogMapHash){publicRecordsData=records;publicRecordsRevision=null;localRecordsData=null;localRecordsRevision=null;clearRecords=records;activeRecordsRevision=null;baseRecordIds=(records.records||[]).map(record=>record.id);}rewardData=rewards; randomDrops=drops; combatValidation={unitModels,scenarios,recordEvidence};storyRankings=storyData; failed = false; signature = "";startRecordPolling();schedule(true);
       }).catch(() => {
         if (destroyed) return;

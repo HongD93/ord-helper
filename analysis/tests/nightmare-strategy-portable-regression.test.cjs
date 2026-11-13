@@ -312,6 +312,103 @@ test('bounded search failures remain conditional rather than being declared impo
  const f=feasibilityFixture();const r=make(f).recommend({l001:1},{...feasibilitySettings,direction:'magic',maxSearchNodes:1});assert(r.targetDeck);assert.equal(r.targetDeck.recommendationFeasibility.status,'conditional');assert(r.targetDeck.recommendationFeasibility.reasons.includes('planning_limit'));
 });
 
+function traitProgressFixture(){
+ const catalog={map:{sha256:hash},units:[unit('h001','흔함'),unit('h002','흔함'),unit('e018','기타'),unit('b001','제한'),unit('t001','변화'),unit('z001','불멸')],recipes:[recipe('B001','b001',{h001:2,h002:2}),recipe('Z001','z001',{t001:1,h002:4})],progressTransformations:{schemaVersion:1,mapSha256:hash,jassSha256:'b'.repeat(64),sourceVerified:true,entries:[{sourceRawcode:'b001',resultRawcode:'t001',skillPointCost:4,sourceVerified:true}]}};
+ return catalog;
+}
+function traitProgressOptions(skillPoints){
+ const source={readOnly:true,sampleCount:2,mapSha256:hash};
+ return {recipeConditions:{status:'confirmed',localPlayer:0,source:{...source},special:{status:'confirmed',localPlayer:0,distortionWoodSurcharge:0,distortionWoodIncrement:5,transformationCount:0,skillPoints,round:20,source:{...source}}},resources:{wood:0,gold:0},items:itemState({})};
+}
+const near=(actual,expected)=>assert(Math.abs(actual-expected)<1e-12,`Expected ${actual} to equal ${expected}`);
+
+test('verified trait progress credits an owned source as 95 percent without rebuilding its leaves',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{b001:1},traitProgressOptions(0));assert.equal(r.percent,95);near(r.ratio,.95);assert.equal(r.direct[0].rawcode,'b001');assert.equal(r.direct[0].missing,0);assert(r.leaves.every(row=>row.missing===0));assert.equal(r.conditionRequirements.find(row=>row.type==='SKPT').count,4);near(r.progressWeighting.conditionWeights.SKPT,.05);
+});
+test('unowned trait sources use recursive common progress rather than treating the transformation as a new leaf',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{h001:1},traitProgressOptions(4));near(r.unitRatio,.25);near(r.ratio,.25*.95+.05);assert.equal(r.percent,29);assert.deepEqual(r.missingLeaves.map(row=>[row.rawcode,row.count]),[['h001',1],['h002',2]]);
+});
+test('partial trait points fill only their five percent share',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{b001:1},traitProgressOptions(2));near(r.ratio,.975);assert.equal(r.percent,98);assert.equal(r.blockedConditions.find(row=>row.type==='SKPT').missing,2);assert.notEqual(r.progressTone,'complete');
+});
+test('a held trait source with all required points reaches 100 only in progress analysis',()=>{
+ const graph=Graph.create(traitProgressFixture()),r=graph.analyze('t001',{b001:1},traitProgressOptions(4));assert.equal(r.percent,100);assert.equal(r.progressTone,'complete');assert.equal(r.chosenRecipe.progressOnly,true);assert.equal(r.chosenRecipe.ingredients.find(row=>row.type==='UNIT').count,1);
+});
+test('unknown trait points never round a complete source up to 100',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{b001:1});assert.equal(r.percent,95);assert(r.unknownConditions.some(row=>row.type==='SKPT'));assert(r.additionalConditionsUnverified);assert(!r.canCompleteWithChoiceWisp);assert.notEqual(r.progressTone,'complete');
+});
+test('trait progress rejects untrusted point snapshots while retaining source credit',()=>{
+ for(const mutate of [o=>o.recipeConditions.special.source.mapSha256='c'.repeat(64),o=>o.recipeConditions.special.source.sampleCount=1,o=>o.recipeConditions.special.source.readOnly=false,o=>o.recipeConditions.special.localPlayer=1]){
+  const options=traitProgressOptions(4);mutate(options);const r=Graph.create(traitProgressFixture()).analyze('t001',{b001:1},options);assert.equal(r.percent,95);assert(r.unknownConditions.some(row=>row.type==='SKPT'));
+ }
+});
+test('trait points alone cannot contribute more than five percent',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{},traitProgressOptions(99));near(r.ratio,.05);assert.equal(r.percent,5);assert.equal(r.unitRatio,0);assert.notEqual(r.progressTone,'complete');
+});
+test('trait source credit does not depend on remaining common copies or money',()=>{
+ const graph=Graph.create(traitProgressFixture()),options=traitProgressOptions(0),a=graph.analyze('t001',{b001:1},options),b=graph.analyze('t001',{b001:1,h001:100,h002:100},options);assert.equal(a.percent,b.percent);near(a.ratio,b.ratio);assert.equal(a.missingDirect.length,0);
+});
+test('common choice wisps can complete the recursive source forecast with known trait points',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{e018:4},traitProgressOptions(4));assert.equal(r.percent,5);assert.equal(r.choiceWispNeeded,4);assert.equal(r.choiceReachablePercent,100);assert(r.canCompleteWithChoiceWisp);assert.equal(r.progressTone,'choice-ready');
+});
+test('common choice coverage cannot satisfy missing trait points',()=>{
+ const r=Graph.create(traitProgressFixture()).analyze('t001',{e018:4},traitProgressOptions(0));assert.equal(r.percent,0);assert.equal(r.choiceReachablePercent,95);assert(!r.canCompleteWithChoiceWisp);assert(r.blockedConditions.some(row=>row.type==='SKPT'));
+});
+test('trait weighting preserves the previous unit currency and item proportions inside the other 95 percent',()=>{
+ const catalog=traitProgressFixture();catalog.recipes[0].ingredients.push({type:'WOOD',count:10},{type:'GOLD',count:100},{type:'ITEM',rawcode:'AI00',count:1});
+ const options=traitProgressOptions(2);options.resources={wood:0,gold:50};options.items=itemState({AI00:1});const old=structuredClone(catalog);delete old.progressTransformations;old.recipes.push(recipe('T001','t001',{b001:1}));
+ const previous=Graph.create(old).analyze('t001',{h001:2},options),r=Graph.create(catalog).analyze('t001',{h001:2},options);near(r.ratio,.95*previous.ratio+.025);near(r.progressWeighting.unitWeight,.95*previous.progressWeighting.unitWeight);near(r.progressWeighting.currencyWeights.GOLD,.95*previous.progressWeighting.currencyWeights.GOLD);near(r.progressWeighting.currencyWeights.WOOD,.95*previous.progressWeighting.currencyWeights.WOOD);near(r.progressWeighting.itemWeight,.95*previous.progressWeighting.itemWeight);assert.equal(r.missingResources.find(row=>row.type==='WOOD').missing,10);assert.equal(r.missingResources.find(row=>row.type==='GOLD').missing,50);
+});
+test('already paid source currency and items are excluded when the trait base is held',()=>{
+ const catalog=traitProgressFixture();catalog.recipes[0].ingredients.push({type:'WOOD',count:999},{type:'GOLD',count:999},{type:'ITEM',rawcode:'AI00',count:1});const r=Graph.create(catalog).analyze('t001',{b001:1},traitProgressOptions(0));assert.equal(r.percent,95);assert.deepEqual(r.resourceRequirements,[]);assert.deepEqual(r.itemRequirements,[]);assert.deepEqual(r.missingResources,[]);assert.deepEqual(r.missingItems,[]);
+});
+test('a trait intermediate contributes its source and point requirement to a recursive upper goal',()=>{
+ const catalog=traitProgressFixture(),graph=Graph.create(catalog),without=structuredClone(catalog);delete without.progressTransformations;without.recipes.push(recipe('T001','t001',{b001:1}));const options=traitProgressOptions(0),stock={b001:1};const old=Graph.create(without).analyze('z001',stock,options),r=graph.analyze('z001',stock,options);near(r.unitRatio,.5);near(r.ratio,.95*old.ratio);assert.equal(r.percent,48);assert.equal(r.conditionRequirements.filter(row=>row.type==='SKPT').length,1);assert.equal(r.conditionRequirements.find(row=>row.type==='SKPT').count,4);
+});
+test('a real production recipe takes precedence over a verified progress-only transformation',()=>{
+ const catalog=traitProgressFixture();catalog.recipes.push(recipe('TREAL','t001',{h002:10}));const r=Graph.create(catalog).analyze('t001',{b001:1},traitProgressOptions(4));assert.equal(r.chosenRecipe.id,'TREAL');assert.equal(r.percent,0);assert(!r.chosenRecipe.progressOnly);assert(!r.conditionRequirements.some(row=>row.type==='SKPT'));
+});
+test('real SKPT recipes use the same five percent condition weight',()=>{
+ const catalog=traitProgressFixture();delete catalog.progressTransformations;catalog.recipes.push(recipe('TREAL','t001',{b001:1},[{type:'SKPT',rawcode:'SKPT',count:4},{type:'WOOD',count:10},{type:'GOLD',count:100},{type:'ITEM',rawcode:'AI00',count:1}]));const without=structuredClone(catalog);without.recipes.at(-1).ingredients=without.recipes.at(-1).ingredients.filter(row=>row.type!=='SKPT');const options=traitProgressOptions(2);options.resources={wood:5,gold:25};options.items=itemState({AI00:1});const stock={b001:1},old=Graph.create(without).analyze('t001',stock,options),r=Graph.create(catalog).analyze('t001',stock,options);near(r.ratio,.95*old.ratio+.025);near(r.progressWeighting.conditionWeights.SKPT,.05);assert.equal(r.chosenRecipe.id,'TREAL');assert.notEqual(r.percent,100);
+});
+test('real SKPT production retains its ordinary execution and point requirement',()=>{
+ const catalog=traitProgressFixture();catalog.recipes.push(recipe('TREAL','t001',{b001:1},[{type:'SKPT',rawcode:'SKPT',count:4}]));const graph=Graph.create(catalog),yes=graph.plan('t001',{b001:1},traitProgressOptions(4)),no=graph.plan('t001',{b001:1},traitProgressOptions(3));assert(yes.executable);assert.deepEqual(yes.steps.map(step=>step.recipeId),['TREAL']);assert(!no.executable);assert.equal(no.reason,'recipe_conditions_blocked');assert.equal(yes.projectedRecipeConditions.special.skillPoints,0);
+});
+test('progress-only transformations never execute through plan planDeck or an explicit synthetic recipe id',()=>{
+ const graph=Graph.create(traitProgressFixture()),stock={b001:1,h001:100,h002:100,e018:100},options={...traitProgressOptions(100),allowChoiceWisps:true};for(const proof of [graph.plan('t001',stock,options),graph.plan('t001',stock,'progress:trait:t001',options),graph.plan('z001',stock,options),graph.planDeck([{rawcode:'t001',count:1}],stock,options),graph.planDeck([{rawcode:'z001',count:1}],stock,options)]){assert(!proof.executable);assert(!proof.steps.some(step=>String(step.recipeId).startsWith('progress:trait:')));}
+});
+test('invalid transformation metadata never creates a progress recipe',()=>{
+ for(const patch of [{schemaVersion:2},{sourceVerified:false},{mapSha256:'c'.repeat(64)},{mapSha256:'bad'},{jassSha256:'bad'},{entries:null}]){const catalog=traitProgressFixture();Object.assign(catalog.progressTransformations,patch);const r=Graph.create(catalog).analyze('t001',{b001:1},traitProgressOptions(4));assert.equal(r.chosenRecipe,null);assert.equal(r.percent,0);assert(!r.conditionRequirements.some(row=>row.type==='SKPT'));}
+});
+test('invalid transformation entries cannot invent sources results counts or verification',()=>{
+ for(const patch of [{sourceVerified:false},{sourceRawcode:'xxxx'},{resultRawcode:'xxxx'},{sourceRawcode:'t001'},{skillPointCost:0},{skillPointCost:-1},{skillPointCost:1.5},{skillPointCost:'4'},{skillPointCost:1000001},{skillPointCost:NaN}]){const catalog=traitProgressFixture();Object.assign(catalog.progressTransformations.entries[0],patch);const r=Graph.create(catalog).analyze('t001',{b001:1},traitProgressOptions(4));assert.equal(r.chosenRecipe,null);assert.equal(r.percent,0);}
+});
+test('an upgrade-only registration does not hide a verified progress transformation or become executable',()=>{
+ const catalog=traitProgressFixture();catalog.recipes.push({...recipe('UPONLY','t001',{}),upgradeRoutes:['z001']});const graph=Graph.create(catalog),r=graph.analyze('t001',{b001:1},traitProgressOptions(0));assert.equal(r.percent,95);assert(r.chosenRecipe.progressOnly);assert(!graph.plan('t001',{b001:1},traitProgressOptions(4)).executable);
+});
+
+function ownedRandomFixture(){const f=fixture();f.catalog.units.push(unit('z001','랜덤전용'));f.combat.units.z001=profile(null,[effect('manaRegeneration',1.5,'ally',{unit:'manaPerSecond'}),effect('armorReduction',50,'enemy',{scope:'single',mode:'proc'})]);return f;}
+const ownedRandomArmy={m001:1,c001:1,n001:1,r001:1,a001:1,b001:1};
+const ownedRandomOptions={...settings,direction:'magic',manualDeckChoice:false,sessionIdentity:'owned-random-fixture',maxMilliseconds:3000};
+test('held random units contribute support effects without becoming invented craft goals',()=>{
+ const f=ownedRandomFixture(),r=make(f).recommend({...ownedRandomArmy,z001:1},ownedRandomOptions),d=r.targetDeck;assert(d);assert(!d.goals.some(g=>g.rawcode==='z001'));assert.equal(d.ownedRandomSupport.added.find(g=>g.rawcode==='z001').count,1);assert(d.assessment.coverage.find(row=>row.role==='manaSupport').sources.some(source=>source.rawcode==='z001'));assert.equal(d.ownedRandomSupport.futureRandomAcquisitionAssumed,false);
+});
+test('a random unit already present in the recorded goals is not counted twice',()=>{
+ const f=ownedRandomFixture();f.combat.curatedStrategyProfiles.deckTemplates[0].supportSlots.push({id:'random',roles:['manaSupport'],preferredRawcodes:['z001'],count:1});const d=make(f).recommend({...ownedRandomArmy,z001:1},ownedRandomOptions).targetDeck;assert.equal(d.goals.find(g=>g.rawcode==='z001').count,1);assert.equal(d.ownedRandomSupport.added.length,0);assert.equal(d.assessment.coverage.find(row=>row.role==='manaSupport').sources.filter(source=>source.rawcode==='z001').reduce((n,s)=>n+s.count,0),1);
+});
+test('a random unit consumed by the chosen production plan contributes no final support bonus',()=>{
+ const f=ownedRandomFixture();f.catalog.recipes[0]=recipe('R100','m001',{z001:1});const stock={...ownedRandomArmy,z001:1};delete stock.m001;const d=make(f).recommend(stock,ownedRandomOptions).targetDeck;assert(d);assert(!d.ownedRandomSupport.added.some(g=>g.rawcode==='z001'));assert.equal(d.ownedRandomSupport.consumedOrReserved.find(g=>g.rawcode==='z001').count,1);assert(!d.assessment.coverage.find(row=>row.role==='manaSupport').sources.some(source=>source.rawcode==='z001'));
+});
+test('only the unconsumed copies of a held random unit contribute to the planned deck',()=>{
+ const f=ownedRandomFixture();f.catalog.recipes[0]=recipe('R100','m001',{z001:1});const stock={...ownedRandomArmy,z001:2};delete stock.m001;const d=make(f).recommend(stock,ownedRandomOptions).targetDeck;assert(d);assert.equal(d.ownedRandomSupport.added.find(g=>g.rawcode==='z001').count,1);assert.equal(d.ownedRandomSupport.consumedOrReserved.find(g=>g.rawcode==='z001').count,1);
+});
+test('changes to held random units refresh their support assessment on the next inventory update',()=>{
+ const f=ownedRandomFixture(),a=make(f),one=a.recommend({...ownedRandomArmy,z001:1},ownedRandomOptions),none=a.recommend(ownedRandomArmy,ownedRandomOptions);assert.equal(one.targetDeck.ownedRandomSupport.added.length,1);assert.equal(none.targetDeck.ownedRandomSupport.added.length,0);assert(!none.targetDeck.assessment.coverage.find(row=>row.role==='manaSupport').sources.some(source=>source.rawcode==='z001'));
+});
+test('unverified random profiles do not become quantitative support evidence',()=>{
+ const f=ownedRandomFixture();f.combat.units.z001.verified=false;const d=make(f).recommend({...ownedRandomArmy,z001:1},ownedRandomOptions).targetDeck;assert(d);assert.equal(d.ownedRandomSupport.added.length,0);
+});
+
 fs.writeFileSync(path.join(__dirname,'nightmare-strategy-test-results.json'),JSON.stringify({passed:passed.length,total:passed.length+failures.length,tests:passed,failures,scope:'Pure joint planning and local metadata only; no game or API input.'},null,2));
 console.log(JSON.stringify({passed:passed.length,total:passed.length+failures.length,tests:passed,failures},null,2));if(failures.length)process.exitCode=1;
 

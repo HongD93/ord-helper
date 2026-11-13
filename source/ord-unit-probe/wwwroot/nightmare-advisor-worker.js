@@ -5,7 +5,8 @@ self.onmessage = function (event) {
   const message = event.data || {};
   try {
     if (message.type === "init") {
-      advisor = self.OrdNightmareStrategy.create(message.catalog, message.combat, message.rules, message.clearRecords,{randomDrops:message.randomDrops,combatValidation:message.combatValidation,storyRankings:message.storyRankings,earlyStoryRecommendations:true,handFitRecommendations:true,reinforcementRecommendations:true,recordOnly:true,supportAdaptation:true,minRecordVersion:"2.321"});
+      const compositionOnly=self.OrdNightmareRecords?.historicalProjection(message.clearRecords,message.catalog)&&message.combat?.map?.sha256!==message.catalog?.map?.sha256;
+      advisor = self.OrdNightmareStrategy.create(message.catalog, message.combat, message.rules, message.clearRecords,{randomDrops:message.randomDrops,combatValidation:message.combatValidation,storyRankings:message.storyRankings,earlyStoryRecommendations:true,handFitRecommendations:true,reinforcementRecommendations:!compositionOnly,recordOnly:true,supportAdaptation:!compositionOnly,minRecordVersion:"2.321"});
       advisorMapHash=message.catalog?.map?.sha256||null;
       recordsRevision=typeof message.recordsRevision==="string"&&/^[a-f0-9]{64}$/.test(message.recordsRevision)?message.recordsRevision:null;
       self.postMessage({type:"ready"});

@@ -36,12 +36,14 @@ function create(options){
  let deckSelectionActive=false,deckSelectionNode=null,queuedRender=false;
  let labelCatalog=null,labelUnits=new Map();
  function unitText(unit,fallback){if(typeof options.formatUnitName!=="function"||!unit)return fallback;try{return text(options.formatUnitName({...unit,displayName:fallback}))||fallback;}catch{return fallback;}}
+ const previousRecord=deck=>list(deck?.sourceEvidence?.balanceAdjustment?.risks).some(risk=>risk.kind==="historical_composition_only");
  function deckLabel(deck){
   if(state.catalog!==labelCatalog){labelCatalog=state.catalog;labelUnits=new Map(list(labelCatalog?.units).filter(unit=>code(unit?.rawcode)).map(unit=>[unit.rawcode,unit]));}
   const goals=list(deck?.goals),goalCodes=new Set(goals.map(goal=>goal.rawcode)),ordered=[...list(deck?.coreRawcodes).filter(rawcode=>goalCodes.has(rawcode)),...goals.map(goal=>goal.rawcode)],seen=new Set(),native=[];
   for(const rawcode of ordered){const unit=labelUnits.get(rawcode);if(seen.has(rawcode)||unit?.playable!==true)continue;seen.add(rawcode);const name=unitText(unit,text(unit.displayName||unit.properName||unit.name)).replace(/\|c[0-9a-f]{8}|\|r/gi,"").replace(/\|n/gi," ").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"").trim();if(name)native.push({rawcode,name,tier:unit.tier});}
-  const upper=native.filter(unit=>finalTiers.has(unit.tier));if(upper.length)return upper.map(unit=>unit.name+"("+unit.tier+")").join(" · ");
-  const cores=new Set(list(deck?.coreRawcodes)),coreNames=native.filter(unit=>cores.has(unit.rawcode));return(coreNames.length?coreNames:native).map(unit=>unit.name).join(" · ")||"목표 덱";
+  const upper=native.filter(unit=>finalTiers.has(unit.tier)),cores=new Set(list(deck?.coreRawcodes)),coreNames=native.filter(unit=>cores.has(unit.rawcode));
+  const label=upper.length?upper.map(unit=>unit.name+"("+unit.tier+")").join(" · "):(coreNames.length?coreNames:native).map(unit=>unit.name).join(" · ")||"목표 덱";
+  return previousRecord(deck)?"[이전 맵 기록] "+label:label;
  }
  const panel=el("section","ord-na");panel.setAttribute("aria-label","악몽 목표 덱");host.append(panel);
  const busy=()=>pending||state.craftRunning===true;
@@ -143,6 +145,7 @@ function create(options){
   const investment=deck?.firstInvestment;
    if(investment?.matched===true&&["전설","히든"].includes(investment.tier)&&text(investment.name))head.append(el("span","ord-na-chip","첫 "+investment.tier+" · "+unitText(investment,text(investment.name))));
   const adjustment=deck?.sourceEvidence?.balanceAdjustment;
+  if(previousRecord(deck))head.append(el("span","ord-na-chip","이전 맵 기록"));
   if(adjustment?.currentProfileReevaluation===true&&/^2\.[0-9]{3}$/.test(adjustment.sourceVersion||"")&&adjustment.sourceVersion!=="2.323"){
    const badge=el("span","ord-na-chip",adjustment.sourceVersion+" 기반 · 2.323 보정");
    const changes=list(adjustment.changes).map(change=>text(change.summary)).filter(Boolean);
