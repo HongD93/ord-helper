@@ -6,6 +6,7 @@
   "use strict";
   // 등급 묶음별 스토리 파괴 시간 순위. 묶음 첫 스토리 기준 5위까지 깃발 둘, 10위까지 깃발 하나.
   const hash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/i.test(value);
+  const text=value=>typeof value==="string"&&value.trim()&&value.length<=40?value.trim():null;
   const rankOf=(ranks,story,limit)=>{const value=ranks?.[story];return Number.isSafeInteger(value)&&value>=1&&value<=limit?value:null;};
 
   function normalize(data,catalog){
@@ -14,8 +15,8 @@
     const known=new Map((Array.isArray(catalog.units)?catalog.units:[]).map(unit=>[unit?.rawcode,unit]));
     const entries=new Map();
     for(const group of data.groups){
-      const stories=group?.stories,limit=group?.rowCount;
-      if(!Array.isArray(stories)||!stories.length||!stories.every(story=>Number.isSafeInteger(story)&&story>0)||
+      const stories=group?.stories,limit=group?.rowCount,label=text(group?.label);
+      if(!label||!Array.isArray(stories)||!stories.length||!stories.every(story=>Number.isSafeInteger(story)&&story>0)||
         !Number.isSafeInteger(limit)||limit<1||limit>512||!Array.isArray(group.units)||group.units.length>limit)return null;
       const used=stories.map(()=>new Set());
       for(const unit of group.units){
@@ -23,13 +24,13 @@
         const ranks=stories.map(story=>rankOf(unit.ranks,story,limit));
         if(ranks.some((rank,index)=>rank===null||used[index].has(rank)))return null;
         ranks.forEach((rank,index)=>used[index].add(rank));
-        entries.set(unit.rawcode,{stories:stories.slice(),ranks});
+        entries.set(unit.rawcode,{label,rank:ranks[0],variant:text(unit.variant)});
       }
     }
     return entries;
   }
   function marks(entry){
-    const rank=entry?.ranks?.[0];
+    const rank=entry?.rank;
     return !Number.isSafeInteger(rank)?"":rank<=5?"🚩🚩":rank<=10?"🚩":"";
   }
   const oldFlags=/🚩[︎️]?/gu;
@@ -45,10 +46,18 @@
     const at=positions.length?start+Math.min(...positions):base.length;
     return tidy([base.slice(0,at).trim(),flags,base.slice(at).trim()].filter(Boolean).join(" "));
   }
+  // 상세 화면 표기: "희귀함 스토리 3위".
   function label(rawcode,entries){
     const entry=entries instanceof Map?entries.get(rawcode):null;
-    if(!entry)return "";
-    return entry.stories.map((story,index)=>story+"번 "+(index?"":"스토리 ")+entry.ranks[index]+"위").join(" · ");
+    return entry?entry.label+" 스토리 "+entry.rank+"위":"";
   }
-  return {normalize,marks,decorate,label};
+  // 순위 목록: 묶음마다 이름과 순위순 유닛(normalize를 통과한 자료만).
+  function listing(data,entries){
+    if(!(entries instanceof Map)||!Array.isArray(data?.groups))return [];
+    return data.groups.map(group=>({
+      label:text(group.label),
+      rows:(Array.isArray(group.units)?group.units:[]).filter(unit=>entries.has(unit?.rawcode)).map(unit=>({rawcode:unit.rawcode,...entries.get(unit.rawcode)})).sort((a,b)=>a.rank-b.rank)
+    })).filter(group=>group.label&&group.rows.length);
+  }
+  return {normalize,marks,decorate,label,listing};
 });
