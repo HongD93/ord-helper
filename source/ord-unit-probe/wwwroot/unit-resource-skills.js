@@ -6,7 +6,7 @@
   "use strict";
   const hash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/i.test(value);
   const own=(value,key)=>value!==null&&typeof value==="object"&&Object.prototype.hasOwnProperty.call(value,key);
-  const hearts=/(?:💖|💗|💙|🤍|❤|♥)[\uFE0E\uFE0F]?/gu;
+  const hearts=/(?:💖|💗|💙|💜|🤍|❤|♥)[\uFE0E\uFE0F]?/gu;
   const tidy=value=>value.replace(/\s+/gu," ").trim();
   const join=(before,marks,after)=>tidy([before.trim(),marks,after.trim()].filter(Boolean).join(" "));
 
@@ -18,7 +18,8 @@
     const unit=resource.units[rawcode];
     if(!own(unit,"sourceVerified")||unit.sourceVerified!==true||!own(unit,"health")||!own(unit,"mana")||
       typeof unit.health!=="boolean"||typeof unit.mana!=="boolean")return name;
-    const marks=(unit.health?"💖":"")+(unit.mana?"💙":"");
+    // 체력 스킬 빨간 하트, 마나 스킬 파란 하트, 둘 다 쓰면 보라 하트 하나.
+    const marks=unit.health&&unit.mana?"💜":unit.health?"❤️":unit.mana?"💙":"";
     hearts.lastIndex=0;
     const first=hearts.exec(name);
     hearts.lastIndex=0;

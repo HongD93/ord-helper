@@ -17,7 +17,7 @@ dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;bo
 <details class="filters"><summary>유닛 필터</summary><div class="filter-content"><div class="filter-main"><label><input id="owned-only" type="checkbox">보유 유닛만</label><label><input id="materials-only" type="checkbox">유닛 재료 충족</label><span id="last-updated"></span><span id="craft-availability">게임 조합 준비 중</span><button id="filter-clear" type="button">필터 초기화</button></div><div class="tier-filters" id="tier-filters"></div></div></details>
 <div class="state-banner" id="state-banner" data-tone="waiting">게임에 연결 중</div><div class="craft-feedback" id="craft-feedback" role="status" hidden></div><main class="board-scroll"><div class="board" id="board"></div><div id="catalog-state" class="empty-board">유닛 정보를 불러오는 중</div></main>
 <dialog id="unit-detail" aria-labelledby="detail-name"><div class="detail-topbar"><button id="detail-back" class="detail-nav" type="button" aria-label="이전 유닛">←</button><button class="close-detail" id="close-detail" type="button" aria-label="닫기">×</button></div><div class="detail-header"><div id="detail-icon"></div><div class="detail-title"><h2 id="detail-name"></h2><div id="detail-tier"></div></div><div class="detail-summary"><span id="detail-story" class="detail-story" hidden><span id="detail-story-rank" class="story-rank"></span></span><div class="detail-abilities" id="detail-abilities" hidden></div></div></div><div class="detail-content"><div class="detail-top"><span id="detail-mode"></span><span id="detail-quantity"></span></div><div id="detail-choice" class="detail-choice" hidden></div><select id="recipe-options" aria-label="조합법" hidden></select><div id="recipe-detail"></div></div></dialog><div id="toast" role="status" hidden></div>
-<script src="/unit-resource-skills.js"></script><script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
+<script src="/unit-resource-skills.js"></script><script src="/unit-story-flags.js"></script><script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
 "use strict";
 const byId=id=>document.getElementById(id);
 const numberFormat=new Intl.NumberFormat("ko-KR");
@@ -46,7 +46,7 @@ const unstableStatuses=new Set(["units_changed","world_changed","partial_read"])
 const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),rows=new Map(),sections=new Map();
 const hiddenTiers=new Set(),collapsedTiers=new Set(),flashTimers=new Map();
 let catalog=null,catalogError=false,liveCounts=null,mode="live",displayGroups=[],nativeUnitDescriptions=null,recipeGraph=null;
-let storyRankings=null;
+let storyRankings=null,storySpeedRanks=null,resourceSkillData=null;
 let startingEvolutionForecast=null;
 let liveState={message:"게임에 연결 중",tone:"waiting",checking:false},receivedRevision=0,latestSnapshot=null;
 let detailUnit=null,selectedRecipe=null,selectedMaterialChoiceRawcode=null,toastTimer=null,crafting=null,liveReceivedAt=0;
@@ -57,7 +57,7 @@ const craftUiTraceKeys=new Map();
 let detailStack=[],boardGroups=[],analysisSignature="",analysisCache=new Map(),lastDetailKey="";
 const nightmareIntegration=(()=>{try{return window.OrdNightmareIntegration?.create({
   host:byId("nightmare-advisor-host"),onOpenUnit:code=>openDetail(code),onCraftTarget:requestRecommendedCraft,onStopCraft:requestCraftStop,onUiState:traceCraftUi,
-  formatUnitName:unit=>{const name=cleanName(unit.displayName||unit.name||unitByCode.get(unit.rawcode)?.displayName);return window.OrdUnitResourceSkills?.decorate?window.OrdUnitResourceSkills.decorate(name,unit.rawcode,nativeUnitDescriptions,catalog?.map?.sha256):name;},
+  formatUnitName:unit=>decorateUnitName(cleanName(unit.displayName||unit.name||unitByCode.get(unit.rawcode)?.displayName),unit.rawcode),
   onCraftContextChange:()=>{if(detailUnit){lastDetailKey="";renderDetail();}},
   onShowRecipe:(code,recipeId)=>{
     if(!unitByCode.has(code))return;
@@ -142,8 +142,9 @@ function normalizeStoryRankings(data,currentCatalog,{historical=false}={}){
 }
 function renderStoryRank(unit){
   const host=byId("detail-story"),label=byId("detail-story-rank"),entry=storyRankings?.entries.get(unit.rawcode);
-  host.hidden=!entry;label.textContent="";if(!entry)return;
-  label.textContent="스토리 "+entry.rank+"위";
+  const speed=!entry&&typeof storySpeedRanks!=="undefined"&&typeof window!=="undefined"?window.OrdUnitStoryFlags?.label?.(unit.rawcode,storySpeedRanks)||"":"";
+  host.hidden=!entry&&!speed;label.textContent="";if(!entry&&!speed)return;
+  label.textContent=entry?"스토리 "+entry.rank+"위":speed;
 }
 async function loadStoryRankings(){
   try{
@@ -247,6 +248,14 @@ function recipeConditionReason(requirements){
   }
   return null;
 }
+// 이름 뒤에 자원 스킬 하트와 스토리 순위 깃발을 붙인다. 하트는 맵 버전이 맞는 자원 자료(2.331 전용 파일 우선)만 쓴다.
+function decorateUnitName(name,rawcode){
+  const view=typeof window!=="undefined"?window:null,hash=typeof catalog!=="undefined"?catalog?.map?.sha256:null;
+  const native=typeof nativeUnitDescriptions!=="undefined"?nativeUnitDescriptions:null,dedicated=typeof resourceSkillData!=="undefined"?resourceSkillData:null;
+  const resource=hash&&dedicated?.catalogMapHash===hash&&dedicated.resourceSkills?.catalogMapHash===hash?dedicated:native;
+  const marked=view?.OrdUnitResourceSkills?.decorate?view.OrdUnitResourceSkills.decorate(name,rawcode,resource,hash):name;
+  return view?.OrdUnitStoryFlags?.decorate&&typeof storySpeedRanks!=="undefined"?view.OrdUnitStoryFlags.decorate(marked,rawcode,storySpeedRanks):marked;
+}
 function compactName(unit){
   if(!unit)return "이름 없는 유닛";
   let name;
@@ -254,8 +263,7 @@ function compactName(unit){
   else if(unit.rawcode==="e018")name="선택 위습";
   else if(unit.rawcode==="e0IX")name="랜덤 위습";
   else name=cleanName(unit.boardDisplay?.displayName||unit.displayName).replace(/뱀초/g,"스네이크맨").replace(/\s*-\s*(?:흔함|안흔함|특별|희귀|전설|히든|초월|불멸|영원|제한|신비|왜곡|변화|랜덤전용|특수|세라핌)\s*$/,"");
-  const markers=typeof window!=="undefined"?window.OrdUnitResourceSkills:null;
-  return markers?.decorate?markers.decorate(name,unit.rawcode,typeof nativeUnitDescriptions!=="undefined"?nativeUnitDescriptions:null,typeof catalog!=="undefined"?catalog?.map?.sha256:null):name;
+  return decorateUnitName(name,unit.rawcode);
 }
 function groupLabel(unit){return unit?.boardDisplay?.groupName||tierSettings.get(unit?.tier)?.label||"기타";}
 function updateAnalysisCache(){
@@ -862,16 +870,20 @@ async function fetchNativeUnitDescriptions(){
 }
 async function loadCatalog(){
   try{
-    const [response,metadata,descriptions,displayIdentities,combatIdentities]=await Promise.all([
+    const optional=url=>fetch(url,{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null);
+    const [response,metadata,descriptions,displayIdentities,combatIdentities,resourceSkills,storySpeed]=await Promise.all([
       fetch("/data/map-catalog.json",{cache:"no-store"}),
       fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       fetchNativeUnitDescriptions(),
       fetch("/board-display-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
-      fetch("/data/combat-inventory-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null)
+      fetch("/data/combat-inventory-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
+      optional("/data/unit-resource-skills-2.331.json"),
+      optional("/data/nightmare-story-speed-2.331.json")
     ]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
-    catalog=data;nativeUnitDescriptions=descriptions;
+    catalog=data;nativeUnitDescriptions=descriptions;resourceSkillData=resourceSkills;
+    storySpeedRanks=window.OrdUnitStoryFlags?.normalize?.(storySpeed,data)||null;
     const combatInventory=globalThis.OrdNightmareIntegration?.configureCombatInventory?.(data,combatIdentities);
     const legacyHiddenUnits=new Set(["h076","h04T","h04Y","h05D","h0CA","h06O"]);
     const groupMetadata=metadata?.units&&Array.isArray(metadata.groups)?metadata:null;
