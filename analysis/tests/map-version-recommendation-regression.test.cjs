@@ -54,6 +54,7 @@ async function checkBoard() {
   assert.deepEqual(groups.filter(([label])=>label.startsWith('전설')),[
     ['전설 [물딜]',['l001']],['전설 [마딜]',['l002']],['전설',['l003']]
   ]);
+  assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(catalog.damageDirectionHints)',node)),{l001:'physical',l002:'magic'});
   assert.equal(vm.runInContext('recipeGraph.choiceEligibleRawcodes',node),undefined);
 }
 
@@ -94,25 +95,47 @@ async function checkCombatInventory() {
   const visibility=code=>vm.runInContext(`unitByCode.get(${JSON.stringify(code)}).visible`,node);
   assert(identities.temporaryRawcodes.every(code=>!visibility(code)));
   assert(visibility('h067')&&!visibility('h0AF')&&visibility('h0CA')&&visibility('h00H'));
-  assert(visibility('H0B2')&&visibility('H0B3')&&visibility('H093'));
+  assert(visibility('H0B2')&&!visibility('H0B3')&&visibility('H093'));
+  assert(visibility('h07L')&&!visibility('h07J'));
   const snapshot=(sequence,entries)=>({sequence,timestamp:new Date().toISOString(),status:'snapshot_read',
     catalogMatchesLoadedArchive:true,loadedMapHash:classicHash,stableUnits:true,readErrors:0,
     counts:entries.map(([rawcode,count])=>({rawcode,count}))});
-  node.applySnapshot(snapshot(1,[['h067',1],['h00H',3],['H0B2',1]]));
-  const combat=snapshot(2,[['h0AF',1],['h00H',3],['H0B2',1],...identities.temporaryRawcodes.map(code=>[code,1])]);
+  node.applySnapshot(snapshot(1,[['h067',1],['h00H',3],['H0B2',1],['h07L',1]]));
+  const combat=snapshot(2,[['h0AF',1],['h00H',3],['H0B3',1],['h07J',1],...identities.temporaryRawcodes.map(code=>[code,1])]);
   node.applySnapshot(combat);
   assert.equal(vm.runInContext('latestSnapshot',node),combat);
   assert.deepEqual(flashes,[]);
   assert.equal(vm.runInContext('liveCounts.get("h067")',node),1);
-  node.applySnapshot(snapshot(3,[['h067',1],['h00H',2],['H0B3',1]]));
-  assert.deepEqual(flashes,[['h00H',-1],['H0B2',-1],['H0B3',1]]);
+  assert.equal(vm.runInContext('liveCounts.get("H0B2")',node),1);
+  assert.equal(vm.runInContext('liveCounts.get("h07L")',node),1);
+  node.applySnapshot(snapshot(3,[['h067',1],['h00H',2],['H0B2',1],['h07L',1]]));
+  assert.deepEqual(flashes,[['h00H',-1]]);
+  node.applySnapshot(snapshot(4,[['h067',1],['h00H',2],['h07L',1],['H0BK',1]]));
+  assert.deepEqual(flashes,[['h00H',-1],['H0B2',-1],['H0BK',1]]);
+  assert.deepEqual(JSON.parse(JSON.stringify([...inventory.normalize(new Map([['H0B2',1],['H0B3',1],['h07L',2],['h07J',1]]))])),
+    [['H0B2',2],['h07L',3]]);
   assert.deepEqual(JSON.parse(JSON.stringify(inventory.nativeProtection({h067:1,h0AF:1,h00H:2,H0B2:1}))),{h00H:2,H0B2:1});
+  assert.deepEqual(JSON.parse(JSON.stringify(inventory.nativeProtection({H0B2:1,H0B3:1,h07L:1,h07J:1}))),
+    {H0B2:2,h07L:2});
+  assert.deepEqual(JSON.parse(JSON.stringify(inventory.nativeProtection({H0B3:2,H0B2:1,h07J:1,h07L:3,h00H:2,h0AF:1}))),
+    {H0B2:3,h07L:4,h00H:2});
+  assert.deepEqual(JSON.parse(JSON.stringify(inventory.nativeProtection({H0B2:1,H0B3:3,h07L:2,h07J:4}))),
+    {H0B2:4,h07L:6});
+  const invalidProtection={H0B3:0,H0B2:1};
+  assert.equal(inventory.nativeProtection(invalidProtection),invalidProtection);
+  assert.equal(inventory.nativeProtection(undefined),undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(inventory.nativeProtection({}))),{});
   for(const bad of [
     {...identities,mapSha256:futureHash},
     {...identities,temporaryRawcodes:[...identities.temporaryRawcodes,'h00H']},
-    {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,H0B3:'H0B2'}},
+    {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,H0B3:'H099'}},
+    {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,h07J:'H0B2'}},
+    {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,H0B2:'H0B3'}},
+    {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,h07L:'h07J'}},
     {...identities,canonicalByRawcode:{...identities.canonicalByRawcode,H093:'H091'}}
   ])assert.equal(node.OrdNightmareIntegration.configureCombatInventory(mapCatalog,bad),null);
+  for(const hash of [oldHash,futureHash])assert.equal(node.OrdNightmareIntegration.configureCombatInventory(
+    {...mapCatalog,map:{...mapCatalog.map,sha256:hash}},{...identities,mapSha256:hash}),null);
 }
 
 async function checkAdvisorCombatInventory() {
@@ -137,7 +160,7 @@ async function checkAdvisorCombatInventory() {
   const api=node.OrdNightmareIntegration;
   assert(api.configureCombatInventory(mapCatalog,identities));
   const advisor=api.create({});
-  const state={catalog:mapCatalog,counts:new Map([['h067',1],['h00H',3]]),receivedAt:Date.now(),
+  const state={catalog:mapCatalog,counts:new Map([['h067',1],['h00H',3],['H0B2',1],['h07L',1]]),receivedAt:Date.now(),
     snapshot:{sessionIdentity:'combat-audit',loadedMapHash:classicHash,catalogMatchesLoadedArchive:true,localPlayer:0},
     liveState:{tone:'live',checking:false},capabilities:{supportedRecipeIds:new Set(['A029'])}};
   const runDebounce=()=>{
@@ -149,16 +172,18 @@ async function checkAdvisorCombatInventory() {
   assert.equal(workers.length,1);
   const worker=workers[0];
   assert.equal(worker.messages[0].catalog.combatInventory.canonicalByRawcode.h0AF,'h067');
+  assert.equal(worker.messages[0].catalog.combatInventory.canonicalByRawcode.H0B3,'H0B2');
+  assert.equal(worker.messages[0].catalog.combatInventory.canonicalByRawcode.h07J,'h07L');
   assert.equal(mapCatalog.combatInventory,undefined);
   worker.onmessage({data:{type:'ready'}});
   const request=worker.messages.at(-1);
   worker.onmessage({data:{type:'result',revision:request.revision,result:{targetDeck:{id:'ready',goals:[]}}}});
   assert.equal(updates.at(-1).calculating,false);
-  advisor.update({...state,counts:new Map([['h0AF',1],['h00H',3],...identities.temporaryRawcodes.map(code=>[code,1])])});
+  advisor.update({...state,counts:new Map([['h0AF',1],['h00H',3],['H0B3',1],['h07J',1],...identities.temporaryRawcodes.map(code=>[code,1])])});
   runDebounce();
   assert.equal(worker.messages.at(-1),request);
   assert.equal(updates.at(-1).calculating,false);
-  advisor.update({...state,counts:new Map([['h067',1],['h00H',2]])});
+  advisor.update({...state,counts:new Map([['h067',1],['h00H',2],['H0B2',1],['h07L',1]])});
   runDebounce();
   assert.equal(worker.messages.at(-1).counts.h00H,2);
   assert.equal(updates.at(-1).calculating,true);
@@ -283,6 +308,42 @@ function checkUiTrace() {
   assert.equal(messages.length,4);
 }
 
+function checkCombatTargets() {
+  const read=name=>JSON.parse(fs.readFileSync(path.join(web,'data',name),'utf8'));
+  const mapCatalog=read('map-catalog.json');
+  if(mapCatalog.map.sha256!==classicHash)return;
+  const utility=require(path.join(web,'nightmare-utility-targets.js'));
+  const line=require(path.join(web,'nightmare-line-damage.js'));
+  const utilityProfile=read('nightmare-utility-targets-2.331.json');
+  const lineProfile=read('nightmare-line-damage-2.331.json');
+  const weaponModel=line.create(mapCatalog,lineProfile);
+  const targets=utility.create(mapCatalog,utilityProfile);
+  const roster=[{rawcode:'h031',count:2},{rawcode:'h09Z',count:1}];
+  const physical=targets.assess(roster,'physical');
+  assert.equal(physical.slow.target,102);
+  assert.equal(physical.slow.value,55);
+  assert.equal(physical.slow.deficit,47);
+  assert.equal(physical.armorReduction.target,211);
+  assert.equal(targets.assess(roster,'magic').armorReduction.target,null);
+  assert.equal(targets.assess(roster,'hybrid').armorReduction.target,211);
+  const blockedCatalog={...mapCatalog,map:{...mapCatalog.map,scriptSha256:oldHash}};
+  assert.equal(utility.create(blockedCatalog,utilityProfile),null);
+  assert.equal(line.create(blockedCatalog,lineProfile).valid,false);
+  const lineReference=weaponModel.assess([{rawcode:'h031',count:2},{rawcode:'unknown',count:1}]);
+  assert.equal(lineReference.scenario.target,'normal_line');
+  assert.equal(lineReference.complete,false);
+  assert.equal(lineReference.unknownUnitCount,1);
+  assert(Math.abs(lineReference.attackDamagePerSecond-2*200001/.95)<1e-6);
+  assert.equal(weaponModel.compare(roster,[{rawcode:'unknown',count:1}]).deltaExpectedDamagePerSecond,null);
+  const skill={trigger:'attack_proc',attackChance:0.25,scope:'area',damagePerHit:400,hits:2};
+  const targetSpecific={...lineProfile,units:{h031:{attack:{baseDamage:350,dice:1,sides:1,intervalSeconds:0.5},
+    components:[{...skill,target:'normal_line'},{...skill,target:'boss'},{...skill,target:'berserk'}]}}};
+  const normalLine=line.create(mapCatalog,targetSpecific).assess([{rawcode:'h031',count:1}]);
+  assert.equal(normalLine.modeledComponents,1);
+  assert.equal(normalLine.skillDamagePerSecond,400);
+  assert.equal(normalLine.expectedDamagePerSecond,1102);
+}
+
 async function run() {
   await checkBoard();
   if (fs.existsSync(path.join(web, 'data', 'map-catalog.json'))) {
@@ -293,6 +354,7 @@ async function run() {
   checkHistoricalStarterRanks();
   await checkRecordGroups();
   checkUiTrace();
+  if(fs.existsSync(path.join(web,'data','map-catalog.json')))checkCombatTargets();
 }
 
 run().catch(error=>{console.error(error);process.exitCode=1;});

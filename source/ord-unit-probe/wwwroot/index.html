@@ -879,6 +879,8 @@ async function loadCatalog(){
     // 목록 분류는 전투 수치와 별개로 유닛의 이름과 등급을 대조한다.
     const displayUnits=groupMetadata&&displayIdentities?.sourceMapSha256===groupMetadata.mapSha256?displayIdentities.units:null;
     displayGroups=combatMetadata||displayUnits?groupMetadata.groups:[];
+    const damageGroups=new Map(displayGroups.filter(group=>["physical","magic"].includes(group.primaryRole)).map(group=>[group.name,group]));
+    data.damageDirectionHints={};
     const wispSettings=combatMetadata?.wispMetadata;
     recipeGraph=window.OrdRecipeGraph?.create(data,{choiceWispRawcode:wispSettings?.commonChoiceRawcode||"e018",...(wispSettings?.verified&&Array.isArray(wispSettings.replacements)?{choiceEligibleRawcodes:wispSettings.replacements}:{})})||null;
     startingEvolutionForecast=window.OrdStartingEvolutionForecast?.create(data,{recipeGraph})||null;
@@ -894,6 +896,8 @@ async function loadCatalog(){
       const unit={...source,displayName:cleanName(source.displayName||source.properName||source.name),tier:assigned?.tier||tierIds.get(String(source.tier))||normalizeTier(source.tier),order:assigned?.order??order++,boardDisplay};
       const hidden=combatInventory?combatInventory.hide(source.rawcode):legacyHiddenUnits.has(source.rawcode);
       unit.visible=(source.playable===true||["e0IX","e018"].includes(source.rawcode))&&!hidden&&!/소환/.test(source.displayName||source.name||"");unitByCode.set(unit.rawcode,unit);
+      const damageGroup=damageGroups.get(boardDisplay?.groupName);
+      if(unit.visible&&source.playable===true&&damageGroup?.unitRawcodes?.includes(source.rawcode))data.damageDirectionHints[source.rawcode]=damageGroup.primaryRole;
       if(unit.visible){if(!unitsByTier.has(unit.tier))unitsByTier.set(unit.tier,[]);unitsByTier.get(unit.tier).push(unit);}
     }
     for(const recipe of data.recipes){if(!recipesByUnit.has(recipe.resultUnitRawcode))recipesByUnit.set(recipe.resultUnitRawcode,[]);recipesByUnit.get(recipe.resultUnitRawcode).push(recipe);}

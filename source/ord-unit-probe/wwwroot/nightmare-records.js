@@ -221,16 +221,21 @@ function create(catalog,combat,data,options={}){
  function templates(counts,settings={}){
    const stock=stockOf(counts),result=[],locked=[],missingRandomTemplates=[];
    if(!compatible)return {templates:[],missingRandomTemplates:[],lockedRecords:[],compatible:false};
-  const kingMode=Object.hasOwn(settings,"kingPathMode")?settings.kingPathMode:settings.includeKingPathDecks===true?"standard":"off";
+  const quattroMission=settings.includeQuattroMission===true;
+  const kingMode=quattroMission?"off":Object.hasOwn(settings,"kingPathMode")?settings.kingPathMode:settings.includeKingPathDecks===true?"standard":"off";
   const groups=new Set();
   if(kingMode==="standard")groups.add("king_path");
   if(kingMode==="martial_law")groups.add("martial_law");
   if(settings.includeMysteriousDecks===true)groups.add("mysterious");
-  if(kingMode==="off"&&settings.includeMysteriousDecks!==true)groups.add("normal");
-  const matching=list(data.records).filter(r=>r.cohort===(settings.recordCohort||data.defaultCohort)&&
-    (r.recommendationGroup==null||groups.has(r.recommendationGroup))&&
-    (options.requiredOwnedMaterialsAvailable?.(goalRows(r).filter(({entry})=>!isResidualGoalTier(entry)).map(({rawcode,entry})=>({rawcode,count:entryCount(entry)})),stock,settings.protectedCounts)??true)),
-    handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
+  if(kingMode==="off"&&(quattroMission||settings.includeMysteriousDecks!==true))groups.add("normal");
+  const matching=list(data.records).filter(record=>{
+    if(record.cohort!==(settings.recordCohort||data.defaultCohort)||(record.recommendationGroup!=null&&!groups.has(record.recommendationGroup)))return false;
+    if(!quattroMission&&!options.requiredOwnedMaterialsAvailable)return true;
+    const goals=goalRows(record).filter(({entry})=>!isResidualGoalTier(entry)).map(({rawcode,entry})=>({rawcode,count:entryCount(entry)}));
+    return (!quattroMission||options.hasQuattroGoals?.(goals)===true)&&
+      (options.requiredOwnedMaterialsAvailable?.(goals,stock,settings.protectedCounts)??true);
+  });
+  const handFitAdvisor=options.handFitAdvisor,usesHandFit=typeof handFitAdvisor?.preselectionScore==="function",affinities=new Map();
   const selectable=usesHandFit?matching.filter(record=>{
    let value=null;
    try{

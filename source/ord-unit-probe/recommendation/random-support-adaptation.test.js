@@ -61,4 +61,20 @@ test('a wider damage target set may preserve a narrower original reference',()=>
 test('support and stun replacements cannot add excluded target categories',()=>{for(const kind of ['slow','stun']){const f=fixture(),more=kind==='stun'?{unit:'seconds',mode:'proc',chancePercent:50,durationSeconds:2,targetDurations:{general:2,resistantHero:1,unit:'seconds'}}:{};f.combat.units.r001.effects=[effect(kind,30,more)];f.combat.units.s003.effects=[effect(kind,40,{...more,targetExclusions:['boss']})];const r=f.make().adapt(f.base,{C001:1,s003:1},{...f.settings,supportCandidateRawcodes:['s003']});assert.equal(r.templates.length,0);}});
 test('unknown or malformed target exclusions never become an unrestricted target set',()=>{assert(Support.targetExclusionsPreserved({targetExclusions:['boss','story']},{targetExclusions:['boss']}));for(const targetExclusions of [null,'boss',[null],['']])assert.equal(Support.targetExclusionsPreserved({}, {targetExclusions}),false);});
 test('automatic reinforcement cannot count a boss-excluded slow as unrestricted coverage',()=>{const f=fixture();f.combat.units.r001.effects=[effect('slow',30)];f.combat.units.s003.effects=[effect('slow',40,{targetExclusions:['boss']})];const r=Reinforcements.create(f.catalog,f.combat).recommend({C001:1,h001:1,h002:1},{...f.settings,reinforcementCandidateRawcodes:['s003'],reinforcementRole:'auto'},{mode:'physical',targetGoals:Support.goalsOf(f.base)});assert(r.needs.requestedRoles.includes('slow'));assert.equal(r.candidates.length,0);});
+test('a weaker aura may replace surplus when the fixed target and range remain covered',()=>{
+ const f=fixture(),points={C001:61,s002:70,s003:41,s001:40};
+ for(const [rawcode,value] of Object.entries(points))f.combat.units[rawcode].effects=[effect('slow',value)];
+ const utilityTargets={assess(goals){
+  const value=goals.reduce((sum,{rawcode})=>sum+points[rawcode],0);
+  return {slow:{target:102,value,deficit:Math.max(0,102-value),complete:true}};
+ }};
+ const adapter=Support.create(f.catalog,f.combat,{utilityTargets});
+ const goals=rawcode=>[{rawcode:'C001',count:1},{rawcode,count:1}];
+ assert.equal(adapter.compare(goals('s002'),goals('s003'),'magic').accepted,true);
+ const short=adapter.compare(goals('s002'),goals('s001'),'magic');
+ assert(short.losses.some(loss=>loss.kind==='utility_target_deficit_increased'&&loss.after===1));
+ f.combat.units.s003.effects[0].range=490;
+ const narrower=Support.create(f.catalog,f.combat,{utilityTargets}).compare(goals('s002'),goals('s003'),'magic');
+ assert(narrower.losses.some(loss=>loss.kind==='support_reference_decreased'));
+});
 const report={passed:tests.filter(row=>row.passed).length,total:tests.length,tests};console.log(JSON.stringify(report,null,2));if(report.passed!==report.total)process.exitCode=1;

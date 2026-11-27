@@ -5,6 +5,11 @@
  const kinds=new Set(["slow","stun","manaRegeneration","manaRecovery","manaAmplification","manaCostReduction","healthRegeneration","attackSpeedBuff","attackDamageBuff","armorReduction","magicResistanceReduction","magicAmplification","allDamageAmplification","explosionAmplification"]);
  const temporary=new Set(["h076","h04T","h04Y","h05D","h0CA"]),damageRoles=new Set(["physicalDps","magicDps","hybridDps"]),purposes=["lineDamage","bossDamage","storyDamage"];
  const preservedFinalTiers=new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]),finalMaterialProxies=new Set(["h04S","H08T"]);
+ const targetMetrics={"slow|enemy|area|continuous|percent":"slow","armorReduction|enemy|area|continuous|armor":"armorReduction"};
+ function utilityDeficit(targets){
+  const rows=[targets?.slow,targets?.armorReduction].filter(row=>row?.target>0);
+  return rows.length&&rows.every(row=>row.complete===true&&finite(row.deficit))?rows.reduce((sum,row)=>sum+row.deficit/row.target,0)/rows.length:null;
+ }
  const clamp=(x,min,max,fallback)=>Number.isSafeInteger(x)?Math.max(min,Math.min(max,x)):fallback;
  function targetExclusionsPreserved(required,candidate){const read=source=>source?.targetExclusions===undefined?[]:Array.isArray(source.targetExclusions)&&source.targetExclusions.every(value=>typeof value==="string"&&value.trim())?source.targetExclusions:null,before=read(required),after=read(candidate);return before!==null&&after!==null&&after.every(value=>before.includes(value));}
  function goalsOf(template){const found=new Map(),add=(rawcode,count)=>{if(typeof rawcode==="string"&&Number.isSafeInteger(count)&&count>0)found.set(rawcode,Math.max(count,found.get(rawcode)||0));};for(const entry of list(template.coreGoals).length?template.coreGoals:list(template.coreRawcodes).map(rawcode=>({rawcode,count:1})))add(entry.rawcode,entry.count);for(const slot of list(template.supportSlots))if(slot.required!==false&&list(slot.preferredRawcodes).length===1)add(slot.preferredRawcodes[0],slot.count||1);return Array.from(found,([rawcode,count])=>({rawcode,count}));}
@@ -14,6 +19,7 @@
   const mapHash=catalog?.map?.sha256,valid=Boolean(mapHash&&combat?.map?.sha256===mapHash&&typeof CombatVerifier?.createNativeManaUsage==="function"),units=new Map(list(catalog?.units).map(u=>[u.rawcode,u]));
   const profiles=valid?combat.units||{}:{},curated=valid?combat.curatedStrategyProfiles?.units||{}:{},modelData=options.unitModels?.map?.sha256===mapHash?options.unitModels.units||{}:{};
   const graph=options.recipeGraph||null,recipes=list(catalog?.recipes),summaries=new Map(),candidateCache=new Map();
+  const utilityDirection=template=>options.utilityDirection?.(template)||template.direction;
   const nativeManaUsage=CombatVerifier?.createNativeManaUsage?.(catalog,combat)||(()=>({usesManaSkills:null,status:"unknown",declarations:[]}));
   const randomCodes=new Set([...list(combat?.acquisitionModel?.randomOnlyRawcodes),...list(catalog?.units).filter(unit=>unit.tier==="랜덤전용").map(unit=>unit.rawcode)]);
   const randomOnly=(code,template)=>randomCodes.has(code)||list(template?.sourceEvidence?.randomOnlyRawcodes).includes(code);
@@ -75,15 +81,28 @@
    for(const row of Object.values(utility)){for(const source of row.sources)if(source.count>1&&!source.sameUnitCopiesStack)unknown.push({rawcode:source.rawcode,kind:"same_unit_copies_stacking_unverified",effectId:source.id,count:source.count});const groups={};for(const source of row.sources)if(source.additiveVerified&&source.stackingGroup&&source.value!==null)groups[source.stackingGroup]=(groups[source.stackingGroup]||0)+source.value*(source.sameUnitCopiesStack?source.count:1);const cross=row.sources.filter(source=>source.crossGroupAdditiveVerified&&source.value!==null),crossGroups={};for(const source of cross){const key=source.stackingGroup||source.id;crossGroups[key]=source.additiveVerified?(crossGroups[key]||0)+source.value*(source.sameUnitCopiesStack?source.count:1):Math.max(crossGroups[key]||0,source.value);}const references=[row.value,...Object.values(groups),...(cross.length?[Object.values(crossGroups).reduce((a,b)=>a+b,0)]:[])].filter(finite);row.verifiedAdditiveGroups=groups;row.crossGroupAdditiveVerified=cross.length>0;row.knownReferenceLowerBound=references.length?Math.max(...references):null;}
    const result={utility,control,roleRanks,manaConsumers,unknown,penalties,damageSources:normalized.filter(goal=>native(goal.rawcode)).map(goal=>damageReferences(goal.rawcode,goal.count)),actualEffectiveDps:null,actualRequiredStun:null,actualCombinedSlow:null};if(summaries.size>=512)summaries.clear();summaries.set(key,result);return result;
   }
-  function compare(originalGoals,candidateGoals){
+  function compare(originalGoals,candidateGoals,direction){
    if(!valid)return {accepted:false,status:"native_map_unverified",losses:[{kind:"native_map_unverified"}],metrics:[],unresolved:[],clearOutcomeTransferred:false,performanceEquivalenceVerified:false};
    const before=assess(originalGoals),after=assess(candidateGoals),losses=[],unresolved=[{kind:"effective_damage_not_established"},{kind:"runtime_control_sufficiency_not_established"}],metrics=[];
+   const utilityBefore=options.utilityTargets?.assess(originalGoals,direction),utilityAfter=options.utilityTargets?.assess(candidateGoals,direction);
+   const line=options.lineDamage?.valid?options.lineDamage.compare(originalGoals,candidateGoals):null;
+   const lineDamageDelta=line?.comparable===true&&finite(line.deltaExpectedDamagePerSecond)?line.deltaExpectedDamagePerSecond:null;
+   for(const kind of Object.values(targetMetrics)){
+    const left=utilityBefore?.[kind],right=utilityAfter?.[kind];
+    if(left?.complete===true&&right?.complete===true&&left.target>0&&right.deficit>left.deficit){
+     losses.push({kind:"utility_target_deficit_increased",role:kind,before:left.deficit,after:right.deficit,target:right.target});
+    }
+   }
    for(const [kind,rank]of Object.entries(before.roleRanks))if((after.roleRanks[kind]||0)<rank)losses.push({kind:"damage_role_loss",role:kind,before:rank,after:after.roleRanks[kind]??null});
    for(const [metric,left]of Object.entries(before.utility)){
     const right=after.utility[metric],leftIds=new Set(left.sources.map(s=>s.id));
     if(!right){losses.push({kind:"support_role_loss",metric});continue;}
     const a=left.knownReferenceLowerBound,b=right.knownReferenceLowerBound,comparable=a!==null&&b!==null;metrics.push({metric,before:a,after:b,strongestSourceBefore:left.value,strongestSourceAfter:right.value,verifiedAdditiveGroupsBefore:left.verifiedAdditiveGroups,verifiedAdditiveGroupsAfter:right.verifiedAdditiveGroups,meaning:"verified_lower_reference_or_strongest_source_not_unknown_stacked_total"});
-    if(a!==null&&(b===null||b+1e-10<a))losses.push({kind:b===null?"known_support_became_unknown":"support_reference_decreased",metric,before:a,after:b});
+    const targetKey=targetMetrics[metric],targetAfter=utilityAfter?.[targetKey],targetBefore=utilityBefore?.[targetKey];
+    const targetPreserved=targetAfter?.target>0&&targetAfter.complete===true&&
+     (targetAfter.deficit===0||targetBefore?.complete===true&&targetAfter.deficit<=targetBefore.deficit)&&
+     left.sources.every(source=>right.sources.some(candidate=>(source.id===candidate.id||!leftIds.has(candidate.id))&&targetExclusionsPreserved(source,candidate)&&(source.range===null||candidate.range>=source.range)));
+    if(!targetPreserved&&a!==null&&(b===null||b+1e-10<a))losses.push({kind:b===null?"known_support_became_unknown":"support_reference_decreased",metric,before:a,after:b});
     if(right.sources.some(source=>source.branchAmbiguous&&!leftIds.has(source.id))){const safe=right.sources.filter(source=>!source.branchAmbiguous||leftIds.has(source.id)).map(source=>source.value).filter(finite);if(a!==null&&(!safe.length||Math.max(...safe)+1e-10<a))losses.push({kind:"conditional_branch_preservation_unverified",metric});}
     if(!comparable)unresolved.push({kind:"support_value_unknown",metric});
     const removed=left.sources.filter(s=>!right.sources.some(t=>t.id===s.id));if(removed.length)unresolved.push({kind:"removed_source_stacking_or_conditions_unverified",metric,sourceIds:removed.map(s=>s.id),groups:unique(removed.map(s=>s.stackingGroup).filter(Boolean))});
@@ -101,7 +120,7 @@
    }
    for(const penalty of after.penalties)if(!before.penalties.some(p=>p.id===penalty.id&&p.rawcode===penalty.rawcode&&p.value===penalty.value))losses.push({kind:"new_native_penalty",...penalty});
    const consumers=new Set([...before.manaConsumers,...after.manaConsumers]);for(const rawcode of consumers){const relevant=summary=>Object.values(summary.utility).flatMap(row=>row.sources).filter(s=>s.kind==="manaRegeneration"&&s.continuous&&s.scope==="area"&&!(s.rawcode===rawcode));const left=relevant(before),right=relevant(after),a=left.some(s=>s.value!==null)?Math.max(...left.filter(s=>s.value!==null).map(s=>s.value)):null,b=right.some(s=>s.value!==null)?Math.max(...right.filter(s=>s.value!==null).map(s=>s.value)):null;if(a!==null&&(b===null||b+1e-10<a))losses.push({kind:"mana_recipient_supply_loss",rawcode,before:a,after:b});}
-   unresolved.push(...before.unknown,...after.unknown);return {accepted:losses.length===0,status:losses.length?"known_function_loss":"conditional_support_comparison",losses,metrics,unresolved,actualEffectiveDps:null,actualRequiredStun:null,clearOutcomeTransferred:false,performanceEquivalenceVerified:false};
+   unresolved.push(...before.unknown,...after.unknown);return {accepted:losses.length===0,status:losses.length?"known_function_loss":"conditional_support_comparison",losses,metrics,unresolved,...(utilityAfter?{utilityTargets:utilityAfter}:{}),...(line?{lineDamageDelta}:{}),actualEffectiveDps:null,actualRequiredStun:null,clearOutcomeTransferred:false,performanceEquivalenceVerified:false};
   }
   const sortedConditions=source=>list(source.conditions).map(String).sort();
   const targetOf=source=>allies.has(source.target)?"ally":["enemy","enemies","all_enemies"].includes(source.target)?"enemy":source.target||"unknown";
@@ -221,7 +240,7 @@
    if(JSON.stringify(normalizedGoals(goalsOf(candidate).filter(goal=>finalCore(goal.rawcode))))!==JSON.stringify(normalizedGoals(goalsOf(original).filter(goal=>finalCore(goal.rawcode)))))return false;
    return JSON.stringify(candidate.supportSlots)===JSON.stringify(expected);
   }
-  function isAdaptation(candidate,original){if(!valid||!structural(candidate,original)||!compare(goalsOf(original),goalsOf(candidate)).accepted)return false;const removed=list(candidate.sourceEvidence.supportReplacements).filter(change=>randomOnly(change.originalRawcode,original)).map(change=>change.originalRawcode);return !removed.length||randomRequirements(goalsOf(original),goalsOf(candidate),removed).accepted;}
+   function isAdaptation(candidate,original){if(!valid||!structural(candidate,original)||!compare(goalsOf(original),goalsOf(candidate),utilityDirection(original)).accepted)return false;const removed=list(candidate.sourceEvidence.supportReplacements).filter(change=>randomOnly(change.originalRawcode,original)).map(change=>change.originalRawcode);return !removed.length||randomRequirements(goalsOf(original),goalsOf(candidate),removed).accepted;}
   function adapt(template,counts,settings={}){
    if(settings.includeMysteriousDecks!==true&&[...goalsOf(template||{}),...list(template?.sourceEvidence?.mapping),...list(template?.goalProjection?.excluded),...list(template?.sourceEvidence?.goalProjection?.excluded)].some(row=>[row?.rawcode,...list(row?.candidateRawcodes)].some(code=>units.get(code)?.tier==="신비")))return {templates:[],comparisons:[],protectedRawcodes:protectedCodes(template||{}),search:{evaluated:0,limitReached:false}};
    const protectedRawcodes=protectedCodes(template||{}),randomSupportNeeds=missingRandomSupport(template||{},counts),empty={templates:[],comparisons:[],protectedRawcodes,randomSupportNeeds,randomSupportSuggestions:[],search:{evaluated:0,limitReached:false}};if(!valid||!finalGoalPolicyAvailable||!sourceValid(template,catalog)||goalsOf(template).some(goal=>Records?.isResidualGoalTier?.(units.get(goal.rawcode))===true)||settings.includeKingPathDecks!==true&&(goalsOf(template).some(goal=>goal.rawcode==="h0C8")||list(template.sourceEvidence?.mapping).some(entry=>entry.rawcode==="h0C8")))return empty;
@@ -234,7 +253,7 @@
     const result=clone(template),replacements=changes.map(change=>{const {slot}=change,candidates=selected(change),row={slotId:slot.id,originalRawcode:slot.preferredRawcodes[0],replacementRawcode:candidates[0].rawcode,count:slot.count||1};if(candidates.length>1)row.replacementGoals=candidates.map(candidate=>({rawcode:candidate.rawcode,count:slot.count||1}));return row;});
     result.supportSlots=replaceSlots(result.supportSlots,replacements);
     const randomRemoved=replacements.filter(change=>randomOnly(change.originalRawcode,template)).map(change=>change.originalRawcode),replacementGoalsNeeded=replacements.filter(change=>randomOnly(change.originalRawcode,template)).flatMap(replacementGoals),production=randomRemoved.length?currentReplacementProof(replacementGoalsNeeded,stock,protectedRawcodes,settings):null;
-    const comparison=compare(originalGoals,goalsOf(result)),randomComparison=randomRemoved.length?randomRequirements(originalGoals,goalsOf(result),randomRemoved):null;
+     const comparison=compare(originalGoals,goalsOf(result),utilityDirection(template)),randomComparison=randomRemoved.length?randomRequirements(originalGoals,goalsOf(result),randomRemoved):null;
     if(randomComparison){comparison.randomReplacementRequirements=randomComparison;comparison.accepted=comparison.accepted&&randomComparison.accepted&&production.executable;comparison.losses.push(...randomComparison.losses,...(production.executable?[]:[{kind:"random_replacement_not_currently_craftable",reason:production.reason}]));comparison.unresolved.push(...randomComparison.unresolved);}
     comparisons.push({replacements,accepted:comparison.accepted,losses:comparison.losses,...(randomComparison?{randomReplacementRequirements:randomComparison,replacementProduction:production}: {})});
     if(!comparison.accepted){if(randomComparison&&production.executable&&randomComparison.requirements.some(row=>row.status==="reference_preserved"))randomSupportSuggestions.push({replacements,replacementGoals:replacementGoalsNeeded,requirements:randomComparison,production,originalRandomUnitsRetained:true,compositionComplete:false,clearOutcomeTransferred:false});return;}
@@ -242,17 +261,25 @@
     result.id=replacementId(template.id,replacements);result.name="[패 반영] "+String(template.name||template.id).replace(/^\[[^\]]+\]\s*/,"");result.sourceEvidence=evidence;result.source=evidence;result.evidenceScope="record_core_preserved_support_adaptation_not_replayed";
     if(Array.isArray(template.missingRandomRequirements))result.missingRandomRequirements=template.missingRandomRequirements.filter(row=>!randomRemoved.includes(row.rawcode));
     const ranked=changes.flatMap(change=>selected(change).map(candidate=>({candidate,count:change.slot.count||1})));
-    result.supportAdaptationRank={ownedReplacementCount:ranked.filter(row=>(stock.get(row.candidate.rawcode)||0)>=row.count).length,progressRatio:ranked.every(row=>row.candidate.progressRatio!==null)?ranked.reduce((sum,row)=>sum+row.candidate.progressRatio,0)/ranked.length:null,completionProbability:ranked.every(row=>row.candidate.completionProbability!==null)?Math.min(...ranked.map(row=>row.candidate.completionProbability)):null,unresolvedCount:comparison.unresolved.length};
+     result.supportAdaptationRank={ownedReplacementCount:ranked.filter(row=>(stock.get(row.candidate.rawcode)||0)>=row.count).length,progressRatio:ranked.every(row=>row.candidate.progressRatio!==null)?ranked.reduce((sum,row)=>sum+row.candidate.progressRatio,0)/ranked.length:null,completionProbability:ranked.every(row=>row.candidate.completionProbability!==null)?Math.min(...ranked.map(row=>row.candidate.completionProbability)):null,utilityDeficit:utilityDeficit(comparison.utilityTargets),lineDamageDelta:comparison.lineDamageDelta??null,unresolvedCount:comparison.unresolved.length};
     variants.push(result);
    };
    for(let i=0;i<choices.length;i++)for(const candidate of choices[i].candidates){singles.push({slot:choices[i].slot,candidate});}
    const singleBudget=Math.min(maximum,Math.ceil(maximum*.55));for(const change of singles.slice(0,singleBudget))tryChanges([change]);
    for(const choice of choices.filter(row=>randomOnly(row.slot.preferredRawcodes[0],template)))for(let i=0;i<Math.min(6,choice.candidates.length);i++)for(let j=i+1;j<Math.min(6,choice.candidates.length);j++)tryChanges([{slot:choice.slot,candidates:[choice.candidates[i],choice.candidates[j]]}]);
    outer:for(let i=0;i<choices.length;i++)for(let j=i+1;j<choices.length;j++)for(const a of choices[i].candidates.slice(0,4))for(const b of choices[j].candidates.slice(0,4)){if(evaluated>=maximum)break outer;if(a.rawcode===b.rawcode)continue;tryChanges([{slot:choices[i].slot,candidate:a},{slot:choices[j].slot,candidate:b}]);}
-   variants.sort((a,b)=>b.supportAdaptationRank.ownedReplacementCount-a.supportAdaptationRank.ownedReplacementCount||(a.supportAdaptationRank.completionProbability!==null&&b.supportAdaptationRank.completionProbability!==null?b.supportAdaptationRank.completionProbability-a.supportAdaptationRank.completionProbability:0)||(a.supportAdaptationRank.progressRatio!==null&&b.supportAdaptationRank.progressRatio!==null?b.supportAdaptationRank.progressRatio-a.supportAdaptationRank.progressRatio:0)||a.supportAdaptationRank.unresolvedCount-b.supportAdaptationRank.unresolvedCount||a.id.localeCompare(b.id));
+    variants.sort((a,b)=>{
+     const left=a.supportAdaptationRank,right=b.supportAdaptationRank;
+     return right.ownedReplacementCount-left.ownedReplacementCount||
+      (left.completionProbability!==null&&right.completionProbability!==null?right.completionProbability-left.completionProbability:0)||
+      (left.progressRatio!==null&&right.progressRatio!==null?right.progressRatio-left.progressRatio:0)||
+      (left.utilityDeficit!==null&&right.utilityDeficit!==null?left.utilityDeficit-right.utilityDeficit:0)||
+      (left.lineDamageDelta!==null&&right.lineDamageDelta!==null?right.lineDamageDelta-left.lineDamageDelta:0)||
+      left.unresolvedCount-right.unresolvedCount||a.id.localeCompare(b.id);
+    });
    return {templates:variants.slice(0,variantLimit),comparisons,protectedRawcodes,randomSupportNeeds,randomSupportSuggestions:randomSupportSuggestions.slice(0,6),search:{evaluated,maxComparisons:maximum,maxCandidates:clamp(settings.supportMaxCandidates,2,16,12),limitReached:evaluated>=maximum,bounded:true}};
   }
   return Object.freeze({adapt,isAdaptation,assess,compare,randomReplacementRequirements:randomRequirements,missingRandomSupport,protectedRawcodes:protectedCodes});
  }
- return Object.freeze({create,goalsOf,targetExclusionsPreserved});
+ return Object.freeze({create,goalsOf,targetExclusionsPreserved,utilityDeficit});
 });
