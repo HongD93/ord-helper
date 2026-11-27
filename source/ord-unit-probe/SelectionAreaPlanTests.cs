@@ -5,7 +5,7 @@ static class SelectionAreaPlanTests
     public static void Run()
     {
         (string Name, Action Run)[] cases = [
-            ("stable narrow-first candidate order", VerifyCentralOrder),
+            ("medium first drag with a narrow fallback", VerifyCentralOrder),
             ("vertical coverage beyond a ground anchor", VerifyVerticalCoverage),
             ("top-edge clipping", VerifyTopClip),
             ("bottom and right clipping", VerifyBottomRightClip),
@@ -52,6 +52,9 @@ static class SelectionAreaPlanTests
         Check(plan.All(area => !geometry.OverlapsMultiboard(area.From, area.To)), "every generated rectangle avoids the board including its interior");
         Check(!geometry.IsSafeCursor(800, 400) && !geometry.IsSafeCursor(698, 400) &&
             geometry.IsSafeArea((300, 300), (500, 600)), "world clicks honor the board and its four-pixel padding while clear areas remain usable");
+        Check(SelectionAreaPlan.CanStartDrag(geometry, (400, 300)) &&
+            !SelectionAreaPlan.CanStartDrag(geometry, (695, 420)) && !SelectionAreaPlan.CanStartDrag(geometry, (18, 300)),
+            "an immediate drag requires room for the full first rectangle at the target");
     }
 
     private static void VerifyMultiboardCentering()
@@ -86,10 +89,11 @@ static class SelectionAreaPlanTests
     {
         var geometry = Standard();
         var plan = SelectionAreaPlan.Create(geometry, (1280, 588));
-        string[] expected = ["square6", "square10", "x16-up64-down20", "x16-up128-down20",
+        string[] expected = ["square10", "square6", "x16-up64-down20", "x16-up128-down20",
             "x16-up200-down24", "x32-up128-down24", "x32-up200-down24", "x64-up200-down24"];
-        Check(plan.Select(item => item.Tag).SequenceEqual(expected), "candidate order must remain bounded and narrow-first");
-        Check(plan[0].From == (1274, 582) && plan[0].To == (1286, 594), "first square uses radius six");
+        Check(plan.Select(item => item.Tag).SequenceEqual(expected), "candidate order keeps a narrow fallback before taller attempts");
+        Check(plan[0].From == (1270, 578) && plan[0].To == (1290, 598), "first square uses radius ten");
+        Check(plan[1].From == (1274, 582) && plan[1].To == (1286, 594), "second square uses radius six");
         Check(plan[2].From == (1264, 524) && plan[2].To == (1296, 608), "first vertical candidate uses the requested asymmetric span");
         Check(plan[^1].From == (1216, 388) && plan[^1].To == (1344, 612), "last candidate has the bounded widest span");
         Valid(geometry, plan);
@@ -140,7 +144,7 @@ static class SelectionAreaPlanTests
     {
         var geometry = Square(40, 40);
         var plan = SelectionAreaPlan.Create(geometry, (20, 20));
-        Check(plan.Length == 1 && plan[0].Tag == "square6", "equal clipped rectangles retain only the first candidate");
+        Check(plan.Length == 1 && plan[0].Tag == "square10", "equal clipped rectangles retain only the first candidate");
         Check(plan[0].From == (16, 16) && plan[0].To == (24, 24), "an exact eight-pixel drag remains valid");
         Check(SelectionAreaPlan.Create(Square(39, 40), (20, 20)).Length == 0 &&
             SelectionAreaPlan.Create(Square(40, 39), (20, 20)).Length == 0,
@@ -169,7 +173,7 @@ static class SelectionAreaPlanTests
         var smallPlan = SelectionAreaPlan.Create(small, (640, 294));
         Check(largePlan.Select(item => item.Tag).SequenceEqual(smallPlan.Select(item => item.Tag)),
             "a resized central viewport preserves candidate priority");
-        Check(smallPlan[0].From == (634, 288) && smallPlan[0].To == (646, 300),
+        Check(smallPlan[0].From == (630, 284) && smallPlan[0].To == (650, 304),
             "drag thresholds stay in client pixels after resizing");
         Check(smallPlan[^1].To.X - smallPlan[^1].From.X == 128,
             "the fixed pixel limit does not incorrectly scale with the old resolution");
@@ -309,7 +313,7 @@ static class SelectionAreaPlanTests
         Check(moving.Length == 3 && moving[0].Tag == "moving-x48-up128-down48", "moving gestures have only three candidates");
         Check(moving[0].To.X - moving[0].From.X == 96 && moving[0].To.Y - moving[0].From.Y == 176 &&
             moving[0].To.X - moving[0].From.X > normal[0].To.X - normal[0].From.X,
-            "a moving ally is not first targeted by a twelve-pixel square");
+            "a moving ally begins with a larger area than a stationary ally");
         Check(moving[^1].To.X - moving[^1].From.X == 224 && moving[^1].To.Y - moving[^1].From.Y == 336,
             "widening has a finite maximum");Valid(geometry, moving);
     }

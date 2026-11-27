@@ -24,9 +24,11 @@ static class GameSelection
     internal static bool IsCurrentCaster(MemoryReader memory, Roots roots, uint? selected, UnitObject[] casters) =>
         selected is not null && casters.Any(unit => unit.Address == selected && CurrentOwnedUnit(memory, roots, unit.Address, unit.Rawcode));
 
-    internal static uint? ReadReusableCaster(MemoryReader memory, Roots roots, UnitObject[] casters)
+    internal static uint? ReadReusableCaster(MemoryReader memory, Roots roots, UnitObject[] casters, bool allowFocusedGroup = false)
     {
         var selected = ReadSingleSelectedAddress(memory, roots);
+        if (selected is null && allowFocusedGroup)
+            selected = ReadCommandFocusAddress(memory, roots, requireUniqueType: true);
         return IsCurrentCaster(memory, roots, selected, casters) ? selected : null;
     }
 
@@ -101,8 +103,8 @@ static class GameSelection
         return count == memory.U32(selection + 0x1F8) && head == memory.U32(selection + 0x1F0) ? result.ToArray() : [];
     }
 
-    // player+34 -> selection+1E0은 활성 대표 포인터다. 이것만으로 다중 선택 주문을 허용하지 않는다.
-    internal static uint? ReadCommandFocusAddress(MemoryReader memory, Roots roots)
+    // player+34 -> selection+1E0은 활성 대표 포인터다.
+    internal static uint? ReadCommandFocusAddress(MemoryReader memory, Roots roots, bool requireUniqueType = false)
     {
         var selected = ReadSelectedAddresses(memory, roots);
         if (selected.Length == 0) return null;
@@ -110,7 +112,13 @@ static class GameSelection
         var selection = memory.U32(player + 0x34);
         var focus = memory.U32(selection + 0x1E0);
         if (!selected.Contains(focus) || memory.U32(selection + 0x1F8) != selected.Length) return null;
-        return memory.U32(selection + 0x1E0) == focus && selected.SequenceEqual(ReadSelectedAddresses(memory, roots))
+        if (requireUniqueType && selected.Length > 1)
+        {
+            var type = memory.U32(focus + 0x30);
+            // 같은 종류가 여러 기면 명령을 실제로 받을 개체를 구분할 수 없다.
+            if (selected.Any(unit => unit != focus && memory.U32(unit + 0x30) == type)) return null;
+        }
+        return selected.SequenceEqual(ReadSelectedAddresses(memory, roots)) && memory.U32(selection + 0x1E0) == focus
             ? focus : null;
     }
 
@@ -127,12 +135,12 @@ static class GameSelection
 
     public static async Task<SelectionAttempt> EnsureCasterAsync(MemoryReader memory, uint moduleBase, Roots roots,
         IntPtr window, CraftCommand command, UnitObject[] owned, CancellationToken cancel, bool forceSelection = false,
-        ChoiceWispCameraSession? cameraSession = null, bool allowForegroundActivation = true)
+        ChoiceWispCameraSession? cameraSession = null, bool allowForegroundActivation = true, bool allowFocusedGroup = false)
     {
         var casters = owned.Where(u => command.CasterUnitRawcodes.Contains(u.Rawcode, StringComparer.Ordinal)).ToArray();
         if (casters.Length == 0) return new(null, "조합을 실행할 재료 유닛을 찾지 못했습니다.");
         if ((forceSelection || !allowForegroundActivation) && GetForegroundWindow() != window) return new(null, "게임 창이 바뀌어 선택 검증을 중단했습니다.");
-        var selected = ReadReusableCaster(memory, roots, casters);
+        var selected = ReadReusableCaster(memory, roots, casters, allowFocusedGroup);
         if (!forceSelection && selected is not null)
             return new(selected, null);
         if (GetForegroundWindow() != window)
@@ -145,20 +153,54 @@ static class GameSelection
                 return new(null, "자동 선택은 전용 프로그램 창에서 실행해 주세요.");
         }
         var initialGeometry = ReadGeometry(memory, roots, window, moduleBase);
+        if (allowFocusedGroup && !forceSelection && ReadSelectedGroupAddresses(memory, roots).Length > 1)
+        {
+            var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, initialGeometry, casters, cancel, allowFocusedGroup);
+            if (portrait.Error is not null || portrait.Address is not null) return portrait;
+        }
         var safePoint = initialGeometry.SafePoint();
         var safeScreen = MoveToClient(window, safePoint.X, safePoint.Y);
-        var geometry = await WaitForStableCameraAsync(() => ReadGeometry(memory, roots, window, moduleBase), () =>
-            GetForegroundWindow() == window && SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)) &&
-            CursorInViewport(window, initialGeometry) && !MouseOrModifiersHeld() &&
-            memory.U32(roots.Ui + 0x1B4) == memory.U32(roots.Ui + 0x214) && memory.Read(moduleBase + 0xD04FEC, 1)[0] == 0, cancel);
-        if (geometry is null) return new(null, "게임 화면이 안정되지 않아 선택을 중단했습니다.");
+        string? cameraFailure = null;
+        var geometry = await WaitForStableCameraAsync(() => ReadGeometry(memory, roots, window, moduleBase), () => (cameraFailure =
+            ChoiceContextFailure(memory, moduleBase, roots, window) ?? (!CursorInViewport(window, initialGeometry) ? "cursor_outside_viewport" :
+                memory.U32(roots.Ui + 0x1B4) != memory.U32(roots.Ui + 0x214) ? "selection_mode_changed" : null)) is null, cancel);
+        if (geometry is null)
+        {
+            Console.WriteLine($"Selection camera interrupted: reason={cameraFailure ?? "camera_unstable"}.");
+            return new(null, "게임 화면이 안정되지 않아 선택을 중단했습니다.");
+        }
         // 이전 입력의 선택/대표 포인터가 화면 안정 대기 중 정리됐으면 새 클릭을 보내지 않는다.
-        selected = ReadReusableCaster(memory, roots, casters);
+        selected = ReadReusableCaster(memory, roots, casters, allowFocusedGroup);
         if (!forceSelection && selected is not null) return new(selected, null);
         if (!forceSelection && ReadSelectedGroupAddresses(memory, roots).Length > 1)
         {
-            var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel);
+            var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel, allowFocusedGroup && !forceSelection);
             if (portrait.Error is not null || portrait.Address is not null) return portrait;
+        }
+        var worldBudget = new SelectionWorldClickBudget();
+        if (allowFocusedGroup && !forceSelection)
+        {
+            var candidates = casters.Select(unit => (Unit: unit, Position: ReadPosition(memory, unit))).ToArray();
+            var local = candidates.Where(candidate => CanSelectInView(geometry, candidate.Position))
+                .OrderByDescending(candidate => Clearance(candidate.Unit, candidate.Position)).ThenBy(candidate => candidate.Unit.Address)
+                .Take(SelectionRetryPolicy.MaximumWorldCandidates);
+            foreach (var candidate in local)
+            {
+                var picked = await SelectTargetAsync(candidate.Unit, allowPan: false);
+                if (picked.Error is not null || picked.Address is not null) return picked;
+            }
+
+            // 화면에서 확인하지 못한 경우에만 가려졌거나 시야 밖에 있는 재료로 이동한다.
+            var remote = candidates.Select(candidate => (candidate.Unit, Position: ReadPosition(memory, candidate.Unit)))
+                .Where(candidate => NeedsCameraMove(candidate.Position))
+                .OrderBy(candidate => Vector2.DistanceSquared(new(candidate.Position.X, candidate.Position.Y), new(geometry.Focus.X, geometry.Focus.Y)))
+                .FirstOrDefault();
+            if (remote.Unit is not null)
+            {
+                var picked = await SelectTargetAsync(remote.Unit, allowPan: true);
+                if (picked.Error is not null || picked.Address is not null) return picked;
+            }
+            return new(null, "재료 유닛 선택을 확인하지 못해 조합하지 않았습니다.");
         }
         var visible = casters.Select(u => (Unit: u, Position: ReadPosition(memory, u)))
             .Select(u => (u.Unit, u.Position, Point: geometry.Project(u.Position + new Vector3(0, 0, 16))))
@@ -176,28 +218,40 @@ static class GameSelection
             if (visible.Length == 0) return new(null, "이동한 화면에서 재료 유닛을 확인하지 못했습니다.");
         }
         // 서로 겹쳐 있는 재료 중에서는 다른 개체와 거리가 큰 유닛을 먼저 선택한다.
-        var targets = visible.OrderByDescending(u => owned.Where(other => other.Address != u.Unit.Address)
-            .Select(other => Vector2.Distance(new(u.Position.X, u.Position.Y), ReadPosition2(memory, other)))
-            .DefaultIfEmpty(float.MaxValue).Min()).ThenBy(u => u.Unit.Address).Take(SelectionRetryPolicy.MaximumWorldCandidates).ToArray();
-        var worldBudget = new SelectionWorldClickBudget();
+        var targets = visible.OrderByDescending(u => Clearance(u.Unit, u.Position))
+            .ThenBy(u => u.Unit.Address).Take(SelectionRetryPolicy.MaximumWorldCandidates).ToArray();
         foreach (var target in targets)
+        {
+            var picked = await SelectTargetAsync(target.Unit, allowPan: true);
+            if (picked.Error is not null || picked.Address is not null) return picked;
+        }
+        return new(null, "재료 유닛 선택을 확인하지 못해 조합하지 않았습니다.");
+
+        float Clearance(UnitObject unit, Vector3 position) => owned.Where(other => other.Address != unit.Address)
+            .Select(other => Vector2.Distance(new(position.X, position.Y), ReadPosition2(memory, other)))
+            .DefaultIfEmpty(float.MaxValue).Min();
+
+        bool NeedsCameraMove(Vector3 position) => geometry.Project(position + new Vector3(0, 0, 16)) is not { } point ||
+            SelectionAreaPlan.NeedsCentering(geometry, point) || allowFocusedGroup && !CanSelectInView(geometry, position);
+
+        async Task<SelectionAttempt> SelectTargetAsync(UnitObject unit, bool allowPan)
         {
             if (!ChoiceInputValid(memory, moduleBase, roots, window) || !geometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase)))
                 return new(null, "게임 화면이나 사용자 입력이 바뀌어 선택을 중단했습니다.");
-            if (!CurrentOwnedUnit(memory, roots, target.Unit.Address, target.Unit.Rawcode))
+            if (!CurrentOwnedUnit(memory, roots, unit.Address, unit.Rawcode))
                 return new(null, "재료 유닛이 바뀌어 선택을 중단했습니다.");
-            var initialPosition = ReadPosition(memory, target.Unit);
-            var currentPoint = geometry.Project(initialPosition + new Vector3(0, 0, 16));
+            var initialPosition = ReadPosition(memory, unit);
+            if (!allowPan && !CanSelectInView(geometry, initialPosition)) return new(null, null);
             // 가장자리의 큰 모델은 선택 영역이 잘릴 수 있으므로 중앙에 여유를 확보한다.
-            if (currentPoint is null || SelectionAreaPlan.NeedsCentering(geometry, currentPoint.Value))
+            if (allowPan && NeedsCameraMove(initialPosition))
             {
                 if (!await PanToWorldAsync(memory, moduleBase, roots, window, new(initialPosition.X, initialPosition.Y), cancel, cameraSession))
                     return new(null, "재료 유닛이 있는 화면으로 이동하지 못했습니다.");
                 geometry = ReadGeometry(memory, roots, window, moduleBase);
-                Console.WriteLine($"Selection view centered: {target.Unit.Rawcode}@0x{target.Unit.Address:X8}.");
+                Console.WriteLine($"Selection view centered: {unit.Rawcode}@0x{unit.Address:X8}.");
             }
             var freshGeometry = ReadGeometry(memory, roots, window, moduleBase);
-            var freshPosition = ReadPosition(memory, target.Unit);
+            var freshPosition = ReadPosition(memory, unit);
             if (!SameSession(roots, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)))
                 return new(null, "게임 연결이 바뀌어 선택을 중단했습니다.");
             if (!geometry.NearlyEquals(freshGeometry))
@@ -205,27 +259,32 @@ static class GameSelection
             var moving = Vector3.Distance(initialPosition, freshPosition) > 2;
             // 같은 종류가 여러 개여도 월드 헛클릭보다 영역 선택→초상화 단독 선택을 먼저 시도한다.
             var picked = await SelectionRetryPolicy.AreaThenWorldAsync(
-                () => SelectAreaAsync(memory, moduleBase, roots, window, geometry, target.Unit, freshPosition, moving, casters, cancel, allowReuse: !forceSelection),
-                () => SelectWorldAsync(memory, moduleBase, roots, window, geometry, target.Unit, casters, selected, worldBudget, cancel, allowReuse: !forceSelection));
-            if (picked.Error is not null || picked.Address is not null) return picked;
-            Console.WriteLine($"Selection candidate exhausted: {target.Unit.Rawcode}@0x{target.Unit.Address:X8}.");
+                () => SelectAreaAsync(memory, moduleBase, roots, window, geometry, unit, freshPosition, moving, casters, cancel,
+                    allowReuse: !forceSelection, allowFocusedGroup: allowFocusedGroup && !forceSelection),
+                () => SelectWorldAsync(memory, moduleBase, roots, window, geometry, unit, casters, selected, worldBudget, cancel,
+                    allowReuse: !forceSelection, allowFocusedGroup: allowFocusedGroup && !forceSelection));
+            if (picked.Error is null && picked.Address is null)
+                Console.WriteLine($"Selection candidate exhausted: {unit.Rawcode}@0x{unit.Address:X8}.");
+            return picked;
         }
-        return new(null, "재료 유닛 선택을 확인하지 못해 조합하지 않았습니다.");
     }
+
+    private static bool CanSelectInView(Geometry geometry, Vector3 position) =>
+        geometry.Project(position + new Vector3(0, 0, 8)) is { } anchor && SelectionAreaPlan.CanStartDrag(geometry, anchor);
 
     private static async Task<SelectionAttempt> SelectWorldAsync(MemoryReader memory, uint moduleBase, Roots roots,
         IntPtr window, Geometry geometry, UnitObject target, UnitObject[] casters,
-        uint? previousSelected, SelectionWorldClickBudget budget, CancellationToken cancel, bool allowReuse = true)
+        uint? previousSelected, SelectionWorldClickBudget budget, CancellationToken cancel, bool allowReuse, bool allowFocusedGroup)
     {
         var safePoint = geometry.SafePoint();
         // HUD에서 단독 선택하지 못한 경우에만 두 높이의 월드 선택을 예비 경로로 사용한다.
         foreach (var height in SelectionRetryPolicy.WorldFallbackHeights)
             {
-                var alreadySelected = allowReuse ? ReadReusableCaster(memory, roots, casters) : null;
+                var alreadySelected = allowReuse ? ReadReusableCaster(memory, roots, casters, allowFocusedGroup) : null;
                 if (alreadySelected is not null) return new(alreadySelected, null, true);
                 if (allowReuse && ReadSelectedGroupAddresses(memory, roots).Length > 1)
                 {
-                    var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel);
+                    var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel, allowFocusedGroup);
                     if (portrait.Error is not null || portrait.Address is not null) return portrait;
                 }
                 if (budget.Remaining == 0) break;
@@ -282,16 +341,16 @@ static class GameSelection
 
     private static async Task<SelectionAttempt> SelectAreaAsync(MemoryReader memory, uint moduleBase, Roots roots,
         IntPtr window, Geometry geometry, UnitObject target, Vector3 previousPosition, bool moving,
-        UnitObject[] casters, CancellationToken cancel, bool allowReuse = true)
+        UnitObject[] casters, CancellationToken cancel, bool allowReuse, bool allowFocusedGroup)
     {
         var candidateIndex = 0;
         for (var totalAttempts = 0; totalAttempts < 8; totalAttempts++)
         {
-            var existing = allowReuse ? ReadReusableCaster(memory, roots, casters) : null;
+            var existing = allowReuse ? ReadReusableCaster(memory, roots, casters, allowFocusedGroup) : null;
             if (existing is not null) return new(existing, null, true);
             if (allowReuse && ReadSelectedGroupAddresses(memory, roots).Length > 1)
             {
-                var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel);
+                var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel, allowFocusedGroup);
                 if (portrait.Error is not null || portrait.Address is not null) return portrait;
             }
             if (!CurrentOwnedUnit(memory, roots, target.Address, target.Rawcode)) return new(null, "재료 유닛이 바뀌어 영역 선택을 중단했습니다.");
@@ -343,7 +402,7 @@ static class GameSelection
             MoveToClient(window, safe.X, safe.Y);
             if (ReadSelectedGroupAddresses(memory, roots).Length > 1)
             {
-                var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel);
+                var portrait = await SelectPortraitAsync(memory, moduleBase, roots, window, geometry, casters, cancel, allowFocusedGroup);
                 if (portrait.Error is not null || portrait.Address is not null) return portrait;
             }
             for (var attempt = 0; attempt < 12; attempt++)
@@ -364,7 +423,7 @@ static class GameSelection
         return new(null, null);
     }
 
-    private sealed record Portrait(uint Button, uint Child, uint Unit, VirtualRect Rect);
+    private sealed record Portrait(uint Button, uint Unit, VirtualRect Rect);
 
     internal static uint? ReadPortraitCaster(MemoryReader memory, uint moduleBase, Roots roots, Geometry geometry, UnitObject[] casters,
         uint? requiredUnit = null) =>
@@ -389,7 +448,6 @@ static class GameSelection
                 var button = memory.U32(row + checked((uint)(index % 6 * 4)));
                 if (button < 0x10000 || memory.U32(button) != moduleBase + 0xAAFAD4 ||
                     memory.U32(button + 0x90) != 1 || memory.U32(button + 0x94) != 1) continue;
-                var child = memory.U32(button + 0x134);
                 var unit = memory.U32(button + 0x124);
                 if (requiredUnit is not null && unit != requiredUnit || !selected.Contains(unit)) continue;
                 var caster = casters.FirstOrDefault(candidate => candidate.Address == unit);
@@ -401,7 +459,7 @@ static class GameSelection
                     rect.Bottom < geometry.Root.Bottom || rect.Top > geometry.Root.Top) continue;
                 // +124/+128은 현재 버튼 대상이다(로컬 RVA40E954/40E95D).
                 // +134 child의 +6A0은 렌더 캐시여서 현재 대상과 달라도 클릭 허가에 쓰지 않는다.
-                found = new(button, child, unit, rect);
+                found = new(button, unit, rect);
                 break;
             }
             catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception or OverflowException)
@@ -414,7 +472,7 @@ static class GameSelection
     }
 
     private static async Task<SelectionAttempt> SelectPortraitAsync(MemoryReader memory, uint moduleBase, Roots roots,
-        IntPtr window, Geometry geometry, UnitObject[] casters, CancellationToken cancel)
+        IntPtr window, Geometry geometry, UnitObject[] casters, CancellationToken cancel, bool allowFocusedGroup)
     {
         var original = ReadSelectedGroupAddresses(memory, roots);
         var eligible = original.Any(address => IsCurrentCaster(memory, roots, address, casters));
@@ -430,14 +488,20 @@ static class GameSelection
         }
         var plan = new PortraitSelectionPlan(original, initial.Unit);
         var selectionWatch = System.Diagnostics.Stopwatch.StartNew();
+        var layoutRefreshUsed = false;
         while (plan.ClickCount < 2)
         {
-            if (!ChoiceInputValid(memory, moduleBase, roots, window)) return new(null, "게임 화면이 바뀌어 초상화 선택을 중단했습니다.");
+            if (InputFailure() is { } inputFailure) return Interrupted(inputFailure);
             var selected = ReadSelectedGroupAddresses(memory, roots);
             var focus = ReadGroupFocusAddress(memory, roots);
             var action = plan.Observe(selected, focus);
-            if (action == PortraitSelectionAction.Ready) return await VerifySingleAsync() ?? new(null, "선택한 유닛이 바뀌어 중단했습니다.");
-            if (action != PortraitSelectionAction.Click) return new(null, "선택한 유닛 구성을 확인하지 못해 중단했습니다.");
+            if (action == PortraitSelectionAction.Ready || allowFocusedGroup && focus == plan.Target && action == PortraitSelectionAction.Click)
+            {
+                if (await VerifySelectionAsync(selected) is { } ready) return ready;
+                if (action == PortraitSelectionAction.Ready) return Interrupted("single_selection_changed");
+                if (InputFailure() is { } changedInput) return Interrupted(changedInput);
+            }
+            if (action != PortraitSelectionAction.Click) return Interrupted("selection_unconfirmed");
             var portrait = FindPortrait(memory, moduleBase, roots, geometry, casters, selected, plan.Target);
             if (portrait is null) return SelectionRetryPolicy.PortraitOutcome(new(null, null), eligible);
             var x = (int)Math.Round(((portrait.Rect.Left + portrait.Rect.Right) * .5 - geometry.Root.Left) / (geometry.Root.Right - geometry.Root.Left) * geometry.Width);
@@ -445,39 +509,74 @@ static class GameSelection
             var alreadyAtPortrait = CursorAtClient(window, (x, y));
             var screen = MoveToClient(window, x, y);
             if (!alreadyAtPortrait) await Task.Delay(15, cancel);
+            if (InputFailure() is { } beforeClickFailure) return Interrupted(beforeClickFailure);
+            if (!CursorAtClient(window, (x, y))) return Interrupted("cursor_moved");
+            if (GetAncestor(WindowFromPoint(screen), 2) != window) return Interrupted("different_window_under_cursor");
             var freshSelection = ReadSelectedGroupAddresses(memory, roots);
-            var fresh = FindPortrait(memory, moduleBase, roots, geometry, casters, freshSelection, plan.Target);
-            if (!CursorAtClient(window, (x, y)) || !ChoiceInputValid(memory, moduleBase, roots, window) || fresh != portrait ||
-                plan.Observe(freshSelection, ReadGroupFocusAddress(memory, roots)) != PortraitSelectionAction.Click ||
-                GetAncestor(WindowFromPoint(screen), 2) != window || !geometry.NearlyEquals(ReadGeometry(memory, roots, window, moduleBase)))
-                return new(null, "초상화나 사용자 입력이 바뀌어 선택을 중단했습니다.");
+            var freshFocus = ReadGroupFocusAddress(memory, roots);
+            if (!freshSelection.SequenceEqual(selected) || freshFocus != focus)
+                return plan.Observe(freshSelection, freshFocus) == PortraitSelectionAction.Ready
+                    ? await VerifySelectionAsync(freshSelection, (x, y)) ?? Interrupted("single_selection_changed")
+                    : Interrupted("selection_or_focus_changed");
+            var freshGeometry = ReadGeometry(memory, roots, window, moduleBase);
+            var fresh = FindPortrait(memory, moduleBase, roots, freshGeometry, casters, freshSelection, plan.Target);
+            // HUD 좌표는 클라이언트 크기와 UI 좌표계에만 의존한다.
+            if (fresh != portrait || geometry.Width != freshGeometry.Width || geometry.Height != freshGeometry.Height || geometry.Root != freshGeometry.Root)
+            {
+                if (layoutRefreshUsed) return Interrupted("portrait_layout_changed");
+                layoutRefreshUsed = true;
+                if (fresh is null) await Task.Delay(15, cancel);
+                if (InputFailure() is { } refreshedInputFailure) return Interrupted(refreshedInputFailure);
+                if (!CursorAtClient(window, (x, y))) return Interrupted("cursor_moved");
+                if (!selected.SequenceEqual(ReadSelectedGroupAddresses(memory, roots)) || ReadGroupFocusAddress(memory, roots) != focus)
+                    return Interrupted("selection_or_focus_changed");
+                geometry = freshGeometry;
+                continue;
+            }
+            if (InputFailure() is { } finalInputFailure) return Interrupted(finalInputFailure);
+            if (!CursorAtClient(window, (x, y))) return Interrupted("cursor_moved");
+            if (!selected.SequenceEqual(ReadSelectedGroupAddresses(memory, roots)) || ReadGroupFocusAddress(memory, roots) != focus)
+                return Interrupted("selection_or_focus_changed");
+            if (GetAncestor(WindowFromPoint(screen), 2) != window) return Interrupted("different_window_under_cursor");
             // 첫 클릭 후 subgroup/정렬이 달라져도 두 번째 클릭은 같은 개체를 대상으로 한다.
             plan.BeforeClick(portrait.Unit);
             await ClickAsync(cancel, waitForReleaseProcessing: false);
-            if (GetForegroundWindow() != window || MouseOrModifiersHeld()) return new(null, "사용자 입력이 감지되어 초상화 선택을 중단했습니다.");
+            if (!CursorAtClient(window, (x, y))) return Interrupted("cursor_moved");
             for (var attempt = 0; attempt < 80; attempt++)
             {
-                if (!ChoiceInputValid(memory, moduleBase, roots, window)) return new(null, "게임 화면이 바뀌어 초상화 선택을 중단했습니다.");
+                if (InputFailure() is { } afterClickFailure) return Interrupted(afterClickFailure);
                 var current = ReadSelectedGroupAddresses(memory, roots);
                 if (current.Length == 0) { await Task.Delay(10, cancel); continue; } // 선택 전환 중에는 클릭을 더 보내지 않고 기다린다.
                 var active = ReadGroupFocusAddress(memory, roots);
                 var observed = plan.Observe(current, active);
-                if (observed == PortraitSelectionAction.Stale)
-                    return new(null, "선택한 유닛 구성이 바뀌어 초상화 선택을 중단했습니다.");
-                if (observed == PortraitSelectionAction.Ready && await VerifySingleAsync() is { } verified) return verified;
+                if (observed == PortraitSelectionAction.Stale) return Interrupted("selection_or_focus_changed");
+                if (active == plan.Target && await VerifySelectionAsync(current, (x, y)) is { } verified) return verified;
+                if (!CursorAtClient(window, (x, y))) return Interrupted("cursor_moved");
                 if (observed == PortraitSelectionAction.Click && active == plan.Target) break;
                 await Task.Delay(10, cancel);
             }
         }
         return SelectionRetryPolicy.PortraitOutcome(new(null, null), eligible);
 
-        async Task<SelectionAttempt?> VerifySingleAsync()
+        string? InputFailure() => ChoiceContextFailure(memory, moduleBase, roots, window) ??
+            (memory.U32(roots.Ui + 0x1B4) != memory.U32(roots.Ui + 0x214) ? "selection_mode_changed" : null);
+
+        SelectionAttempt Interrupted(string reason)
         {
-            if (ReadSingleSelectedAddress(memory, roots) != plan.Target || !IsCurrentCaster(memory, roots, plan.Target, casters)) return null;
+            Console.WriteLine($"Portrait selection interrupted: reason={reason}, clicks={plan.ClickCount}, elapsedMs={selectionWatch.ElapsedMilliseconds}.");
+            return new(null, "초상화나 사용자 입력이 바뀌어 선택을 중단했습니다.");
+        }
+
+        async Task<SelectionAttempt?> VerifySelectionAsync(uint[] observedSelection, (int X, int Y)? expectedCursor = null)
+        {
+            if (ReadReusableCaster(memory, roots, casters, allowFocusedGroup) != plan.Target) return null;
             await Task.Delay(30, cancel);
-            if (!ChoiceInputValid(memory, moduleBase, roots, window) || ReadSingleSelectedAddress(memory, roots) != plan.Target ||
-                ReadCommandFocusAddress(memory, roots) != plan.Target || !IsCurrentCaster(memory, roots, plan.Target, casters)) return null;
-            Console.WriteLine($"Portrait single selection verified: selected=0x{plan.Target:X8}, clicks={plan.ClickCount}, elapsedMs={selectionWatch.ElapsedMilliseconds}.");
+            if (InputFailure() is not null || expectedCursor is { } point && !CursorAtClient(window, point) ||
+                !observedSelection.SequenceEqual(ReadSelectedGroupAddresses(memory, roots)) ||
+                ReadReusableCaster(memory, roots, casters, allowFocusedGroup) != plan.Target ||
+                !observedSelection.SequenceEqual(ReadSelectedGroupAddresses(memory, roots))) return null;
+            var selection = observedSelection.Length == 1 ? "single selection" : "group focus";
+            Console.WriteLine($"Portrait {selection} verified: selected=0x{plan.Target:X8}, clicks={plan.ClickCount}, elapsedMs={selectionWatch.ElapsedMilliseconds}.");
             var safe = geometry.SafePoint();
             MoveToClient(window, safe.X, safe.Y);
             return new(plan.Target, null, true);

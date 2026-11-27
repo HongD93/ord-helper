@@ -50,6 +50,8 @@ static class CraftMaterialChoices
             command.Ingredients.Any(item => item.Rawcode == "H08T" || item.AcceptedRawcodes is not null)) return false;
         // 맵은 숨김 생존자도 H08T 그룹에서 제거할 수 있다. 비활성 개체도 후보 수에서 빼지 않는다.
         var sources = owned.Units.Where(unit => NativeCandidateForms.Contains(unit.Rawcode, StringComparer.Ordinal)).ToArray();
-        return owned.ReadErrors == 0 && sources.Length == 1 && sources[0].Rawcode == command.MaterialChoiceRawcode && UnitRules.IsActive(sources[0]);
+        return owned.ReadErrors == 0 && sources.Length == 1 &&
+            CombatMaterialForms.Canonical(sources[0].Rawcode, command.MapHash) == command.MaterialChoiceRawcode &&
+            UnitRules.IsActive(sources[0]);
     }
 }

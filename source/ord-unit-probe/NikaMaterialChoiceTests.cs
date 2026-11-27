@@ -76,7 +76,7 @@ static class NikaMaterialChoiceTests
     {
         var folder = Path.Combine(Path.GetTempPath(), "ord-nika-fixture-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
         var catalog = Path.Combine(folder, "catalog.json"); var aliases = Path.Combine(folder, "aliases.json");
-        var commands = Commands(); var allCodes = commands.Select(command => command.ResultRawcode).Concat(commands.SelectMany(command => command.Ingredients).Select(item => item.Rawcode)).Concat(CraftMaterialChoices.LuffyForms).Distinct().ToArray();
+        var commands = Commands(); var allCodes = commands.Select(command => command.ResultRawcode).Concat(commands.SelectMany(command => command.Ingredients).Select(item => item.Rawcode)).Concat(CraftMaterialChoices.NativeCandidateForms).Distinct().ToArray();
         var recipes = commands.Select(command => new { id = command.RecipeId, resultUnitRawcode = command.ResultRawcode, resultCount = 1, casterUnitRawcodes = Array.Empty<string>(), ingredients =
             command.Ingredients.Select(item => new Dictionary<string, object?> { ["type"] = "UNIT", ["rawcode"] = item.Rawcode, ["count"] = item.Count, ["acceptedRawcodes"] = item.AcceptedRawcodes })
             .Concat((command.ItemRequirements ?? []).Select(item => new Dictionary<string, object?> { ["type"] = "ITEM", ["rawcode"] = item.Rawcode, ["count"] = item.Count }))
@@ -96,6 +96,14 @@ static class NikaMaterialChoiceTests
                 if (result.GetProperty("status").GetString() != "succeeded" || fixture.Calls != 1 || fixture.Stock.GetValueOrDefault("H0BK") != 1 || fixture.Stock.GetValueOrDefault(form) != 0 || fixture.Stage != 2 || fixture.Item != 0) throw new Exception("Real branch service completion failed: " + result);
                 checks++;
             }
+            var transformed = new ServiceFixture("H0B3");
+            var transformedResult = await new GameCraftService(transformed.Snapshot, catalog, aliases, transformed.Execute)
+                .RunFixtureAsync("ET02", 1, default, app, expectedSteps: [new("craft", "ET02", MaterialChoiceRawcode: "H0B2")]);
+            if (transformedResult.GetProperty("status").GetString() != "succeeded" || transformed.Calls != 1 ||
+                transformed.Stock.GetValueOrDefault("H0B3") != 0 || transformed.Stock.GetValueOrDefault("H0BK") != 1 ||
+                transformed.Stage != 2 || transformed.Item != 0)
+                throw new Exception("Transformed real branch service completion failed: " + transformedResult);
+            checks++;
             foreach (var stage in new int?[] { null, 0, 2 })
             {
                 var fixture = new ServiceFixture("H099") { Stage = stage }; var service = new GameCraftService(fixture.Snapshot, catalog, aliases, fixture.Execute);
@@ -106,7 +114,12 @@ static class NikaMaterialChoiceTests
             var ambiguous = new ServiceFixture("H099"); ambiguous.Stock["H0B2"] = 1;
             var rejected = await new GameCraftService(ambiguous.Snapshot, catalog, aliases, ambiguous.Execute).RunFixtureAsync("ET02", 1, default, app);
             if (rejected.GetProperty("status").GetString() != "failed" || ambiguous.Calls != 0) throw new Exception("Ambiguous group reached input.");
-            return checks + 1;
+            var transformedAmbiguous = new ServiceFixture("H099"); transformedAmbiguous.Stock["H0B3"] = 1;
+            var transformedRejected = await new GameCraftService(transformedAmbiguous.Snapshot, catalog, aliases, transformedAmbiguous.Execute)
+                .RunFixtureAsync("ET02", 1, default, app);
+            if (transformedRejected.GetProperty("status").GetString() != "failed" || transformedAmbiguous.Calls != 0)
+                throw new Exception("A transformed second member of the Nika group reached input.");
+            return checks + 2;
         }
         finally { File.Delete(catalog); File.Delete(aliases); Directory.Delete(folder); }
     }
@@ -121,8 +134,15 @@ static class NikaMaterialChoiceTests
         internal Task<string?> Execute(PlannedCraftStep step, JsonElement baseline, CancellationToken cancel)
         {
             cancel.ThrowIfCancellationRequested(); Calls++;
-            if (step.MaterialChoiceRawcode != form || step.Ingredients.Any(item => item.Rawcode == "H08T")) throw new Exception("Canonical proxy reached fixture input.");
-            foreach (var item in step.Ingredients) Stock[item.Rawcode] -= item.Count;
+            if (step.MaterialChoiceRawcode != CombatMaterialForms.Canonical(form, GameProgression.SupportedMapHash) ||
+                step.Ingredients.Any(item => item.Rawcode == "H08T")) throw new Exception("Canonical proxy reached fixture input.");
+            if (!baseline.GetProperty("counts").EnumerateArray().Any(row => row.GetProperty("rawcode").GetString() == form))
+                throw new Exception("The native executor lost the original raw combat form.");
+            foreach (var item in step.Ingredients)
+            {
+                var rawcode = form == "H0B3" && item.Rawcode == "H0B2" ? form : item.Rawcode;
+                Stock[rawcode] -= item.Count;
+            }
             Stock[step.ResultRawcode] = Stock.GetValueOrDefault(step.ResultRawcode) + step.ResultCount; Stage = 2; Item = 0;
             return Task.FromResult<string?>(null);
         }

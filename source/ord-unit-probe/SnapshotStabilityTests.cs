@@ -43,7 +43,7 @@ static class SnapshotStabilityTests
         Check(!SnapshotStability.SameInventory(first, null, ids), "a missing second sample remains blocked");
 
         var timed = new[] { "h05D", "h06N", "h0CB", "h0B8", "h0B9", "h0BA", "h0BB", "h078", "h076", "h079", "h0CP" };
-        var liveIds = ids.Concat(timed).Concat(["h00H", "h0AF", "h067", "H099", "H0B2", "H08T", "H0BK", "H093", "H091", "H0B6"])
+        var liveIds = ids.Concat(timed).Concat(["h00H", "h0AF", "h067", "H099", "H0B2", "H0B3", "h07L", "h07J", "H08T", "H0BK", "H093", "H091", "H0B6"])
             .ToHashSet(StringComparer.Ordinal);
         var mapHash = GameProgression.SupportedMapHash;
         var catalog = JsonSerializer.SerializeToElement(new
@@ -54,7 +54,8 @@ static class SnapshotStabilityTests
             {
                 new { resultUnitRawcode = "h067", ingredients = new[] { new { type = "KING", rawcode = "h067" } } },
                 new { resultUnitRawcode = "h002", ingredients = new[] { new { type = "UNIT", rawcode = "h00H" } }, casterUnitRawcodes = new[] { "h001" } },
-                new { resultUnitRawcode = "H0BK", ingredients = new[] { new { type = "UNIT", rawcode = "H099", logicalRawcode = "H08T", acceptedRawcodes = new[] { "H099", "H0B2" } } } }
+                new { resultUnitRawcode = "H0BK", ingredients = new[] { new { type = "UNIT", rawcode = "H099", logicalRawcode = "H08T", acceptedRawcodes = new[] { "H099", "H0B2" } } } },
+                new { resultUnitRawcode = "h002", ingredients = new[] { new { type = "UNIT", rawcode = "h07L" } } }
             },
             progressTransformations = new { entries = new[] { new { sourceRawcode = "H091", resultRawcode = "H093" } } }
         });
@@ -94,6 +95,46 @@ static class SnapshotStabilityTests
             "a real zombie ingredient changes live stability");
         Check(!SnapshotStability.SameLiveInventory(first, activeSummons with { ReadErrors = 1 }, liveIds, identity),
             "temporary objects cannot bypass a read failure");
+
+        var materialIdentity = Parse(timed, new() { ["H0B3"] = "H0B2", ["h07J"] = "h07L" });
+        Check(materialIdentity is not null, "only the two verified combat material pairs may merge recipe material identities");
+        foreach (var (original, form) in new[] { ("H0B2", "H0B3"), ("h07L", "h07J") })
+        {
+            var baseUnit = new UnitObject(0x8D000, original, 6, 0);
+            var formUnit = baseUnit with { Rawcode = form };
+            var baseInventory = Add(baseUnit);
+            var formInventory = Add(formUnit);
+            var materialIds = new HashSet<string>([original], StringComparer.Ordinal);
+            var command = new CraftCommand("TEST", "h002", 1, [new(original, 1)], null, null, [], MapHash: mapHash);
+            Check(SnapshotStability.SameLiveInventory(baseInventory, formInventory, liveIds, materialIdentity),
+                "material combat form preserves live identity: " + original);
+            Check(SnapshotStability.SameInventory(baseInventory, formInventory, materialIds, mapHash) &&
+                !SnapshotStability.SameInventory(baseInventory, formInventory, materialIds),
+                "same-address combat material normalization is opt-in for the verified map: " + original);
+            Check(GameInput.HasIngredients(command, formInventory) &&
+                !GameInput.HasIngredients(command with { MapHash = new string('0', 64) }, formInventory),
+                "native material verification recognizes only map-proven forms: " + original);
+            var reads = 0;
+            Check(GameInput.TryReadCommandInventory(command, roots, _ => ++reads == 1 ? baseInventory : formInventory,
+                () => roots, out _), "native input can cross an ongoing same-address transformation: " + original);
+            Check(!GameInput.HasIngredients(command, Add(formUnit with { Flags5c = 0x100 })) &&
+                !GameInput.HasIngredients(command, Add(formUnit) with { ReadErrors = 1 }),
+                "combat material aliases preserve hidden-unit and read-error checks: " + original);
+            Check(!SnapshotStability.SameInventory(baseInventory, Add(formUnit with { Address = 0x8E000 }), materialIds, mapHash) &&
+                !SnapshotStability.SameInventory(baseInventory, first, materialIds, mapHash),
+                "a replacement or consumed combat material still changes inventory: " + original);
+        }
+        var snakeCommand = new CraftCommand("ET02", "H0BK", 1, [new("H0B2", 1)], "태양신니카", null, [],
+            MaterialChoiceRawcode: "H0B2", MapHash: mapHash);
+        var snakeForm = new UnitObject(0x8F000, "H0B3", 6, 0);
+        Check(GameInput.HasIngredients(snakeCommand, Add(snakeForm)), "Nika can consume a unique active Black Mamba");
+        Check(!GameInput.HasIngredients(snakeCommand, new([snakeForm, new(0x90000, "H099", 6, 0)], 0)) &&
+            !GameInput.HasIngredients(snakeCommand, new([snakeForm, new(0x90000, "H0B2", 6, 0x100)], 0)),
+            "Nika still rejects multiple or hidden material-group candidates");
+        var otherMap = JsonSerializer.SerializeToElement(new { loadedMapHash = new string('0', 64) });
+        Check(GameInput.ExecuteAsync(snakeCommand, otherMap, CancellationToken.None).GetAwaiter().GetResult() ==
+            "조합 정보와 실행 중인 맵이 달라 입력하지 않았습니다.",
+            "a command cannot authorize combat aliases against a different baseline map");
         Console.WriteLine($"PASS: inventory snapshot stability ({passed} checks).");
     }
 }
