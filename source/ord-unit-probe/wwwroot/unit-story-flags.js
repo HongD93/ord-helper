@@ -4,7 +4,7 @@
   if(root)root.OrdUnitStoryFlags=api;
 })(typeof globalThis!=="undefined"?globalThis:this,function(){
   "use strict";
-  // 등급 묶음별 스토리 파괴 시간 순위. 묶음 첫 스토리 기준 5위까지 깃발 둘, 10위까지 깃발 하나.
+  // 등급 묶음별 순위 자료(스토리 파괴 시간, 라인딜 전멸 시간). 깃발은 스토리 순위에만 붙인다: 묶음 첫 스토리 기준 5위까지 깃발 둘, 10위까지 깃발 하나.
   const hash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/i.test(value);
   const text=value=>typeof value==="string"&&value.trim()&&value.length<=40?value.trim():null;
   const rankOf=(ranks,story,limit)=>{const value=ranks?.[story];return Number.isSafeInteger(value)&&value>=1&&value<=limit?value:null;};
@@ -13,7 +13,7 @@
     const mapHash=catalog?.map?.sha256;
     if(data?.schemaVersion!==1||!hash(mapHash)||data.catalogMapHash!==mapHash||!Array.isArray(data.groups)||!data.groups.length)return null;
     const known=new Map((Array.isArray(catalog.units)?catalog.units:[]).map(unit=>[unit?.rawcode,unit]));
-    const entries=new Map();
+    const entries=new Map(),noun=text(data.title)||"스토리";
     for(const group of data.groups){
       const stories=group?.stories,limit=group?.rowCount,label=text(group?.label);
       if(!label||!Array.isArray(stories)||!stories.length||!stories.every(story=>Number.isSafeInteger(story)&&story>0)||
@@ -24,7 +24,7 @@
         const ranks=stories.map(story=>rankOf(unit.ranks,story,limit));
         if(ranks.some((rank,index)=>rank===null||used[index].has(rank)))return null;
         ranks.forEach((rank,index)=>used[index].add(rank));
-        entries.set(unit.rawcode,{label,rank:ranks[0],variant:text(unit.variant)});
+        entries.set(unit.rawcode,{label,noun,rank:ranks[0],variant:text(unit.variant)});
       }
     }
     return entries;
@@ -46,16 +46,17 @@
     const at=positions.length?start+Math.min(...positions):base.length;
     return tidy([base.slice(0,at).trim(),flags,base.slice(at).trim()].filter(Boolean).join(" "));
   }
-  // 상세 화면 표기: "희귀함 스토리 3위".
+  // 상세 화면 표기: "희귀함 스토리 3위", "초월·불멸·영원·제한·신비 라인딜 2위".
   function label(rawcode,entries){
     const entry=entries instanceof Map?entries.get(rawcode):null;
-    return entry?entry.label+" 스토리 "+entry.rank+"위":"";
+    return entry?entry.label+" "+entry.noun+" "+entry.rank+"위":"";
   }
   // 순위 목록: 묶음마다 이름과 순위순 유닛(normalize를 통과한 자료만).
   function listing(data,entries){
     if(!(entries instanceof Map)||!Array.isArray(data?.groups))return [];
+    const title=text(data.title)||"스토리";
     return data.groups.map(group=>({
-      label:text(group.label),
+      label:text(group.label),title,
       rows:(Array.isArray(group.units)?group.units:[]).filter(unit=>entries.has(unit?.rawcode)).map(unit=>({rawcode:unit.rawcode,...entries.get(unit.rawcode)})).sort((a,b)=>a.rank-b.rank)
     })).filter(group=>group.label&&group.rows.length);
   }
