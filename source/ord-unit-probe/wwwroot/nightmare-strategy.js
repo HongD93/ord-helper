@@ -1218,15 +1218,14 @@
           const legalRows=rows.filter(row=>!["recipe_conditions_blocked","unsupported_recipe"].includes(actions.get(row.rawcode)?.reason));
           const percent=row=>finite(row.progress?.percent)?row.progress.percent:-1,ratio=row=>finite(row.progress?.ratio)?row.progress.ratio:-1;
           const readyOrder=(a,b)=>Number(b.ready)-Number(a.ready);
-          const materialOnlyFallback=earlyStoryAdvisor.materialOnly&&!earlyStoryAdvisor.historicalStoryReference;
+          const materialOnlyFallback=earlyStoryAdvisor.materialOnly&&!earlyStoryAdvisor.storyRanking;
           legalRows.sort((a,b)=>(materialOnlyFallback?readyOrder(a,b):0)||percent(b)-percent(a)||ratio(b)-ratio(a)||readyOrder(a,b)||unitGap(a)-unitGap(b)||((actions.get(a.rawcode)?.choiceWisps??a.progress?.choiceWispNeeded??Infinity)-(actions.get(b.rawcode)?.choiceWisps??b.progress?.choiceWispNeeded??Infinity))||woodGap(a)-woodGap(b)||(a.storyRank??Infinity)-(b.storyRank??Infinity)||a.rawcode.localeCompare(b.rawcode));
           const top=legalRows.slice(0,3),topCodes=new Set(top.map(row=>row.rawcode));for(const id of ids)if(!topCodes.has(id.slice("early-story:".length)))goalContexts.delete(id);
           if(top.length||earlyStoryAdvisor.candidateCount>0){const targets=top.map(row=>actions.get(row.rawcode)),best=targets.find(target=>target.available===true);selectedId=null;lastSelectedTemplate=null;lastSelectedSupportBase=null;
             const earlyStory={
               candidates:top,selectedRawcode:top[0]?.rawcode||null,policy:earlyStoryAdvisor.policy,
               ...(earlyStoryAdvisor.materialOnly?{materialOnly:true}:{}),
-              ...(earlyStoryAdvisor.historicalStoryReference?{historicalStoryReference:true}:{}),
-              storyMeasurementVersion:earlyStoryAdvisor.storyMeasurementVersion,sourceExperimentVersion:earlyStoryAdvisor.sourceExperimentVersion,
+              ...(earlyStoryAdvisor.storyRanking?{storyRanking:true,storyLabel:earlyStoryAdvisor.storyLabel}:{}),
               relativeQualityFraction:earlyStoryAdvisor.relativeQualityFraction,sourceCandidateCount:earlyStoryAdvisor.sourceCandidateCount,
               evaluatedCandidateCount:rows.length,craftRunning:false
             };

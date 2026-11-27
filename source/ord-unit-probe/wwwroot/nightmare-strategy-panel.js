@@ -180,9 +180,9 @@ function create(options){
  function appendCraftMessage(){const message=localError||text(state.craftMessage)||(busy()?"조합 중":"");if(message){const safe=message.length<=180&&!/[A-Za-z]:[\\/]|stacktrace|\bat \w+[.(]/i.test(message)?message:"조합 상태를 확인해 주세요.";const status=el("div","ord-na-status",safe);status.setAttribute("role","status");if(localError||state.craftTone==="error")status.dataset.tone="error";panel.append(status);}}
  function renderEarlyStory(result){
   const materialOnly=result.earlyStory?.materialOnly===true;
-  const historicalReference=result.earlyStory?.historicalStoryReference===true;
+  const storyRanking=result.earlyStory?.storyRanking===true;
   const head=el("div","ord-na-head"),controls=el("div","ord-na-controls");head.append(el("h2","ord-na-title",materialOnly?"첫 전설·히든":"첫 스토리 유닛"));
-  if(materialOnly)head.append(el("span","ord-na-chip",historicalReference?"이전 순위 참고":"재료 기준"));
+  if(materialOnly)head.append(el("span","ord-na-chip",storyRanking?"스토리 순위":"재료 기준"));
   appendStop(head);appendPathControls(controls);head.append(controls);panel.append(head);
   const brulee=bruleeAction(result),native=new Map(list(state.catalog?.units).map(unit=>[unit.rawcode,unit])),seen=new Set(),grid=el("div","ord-na-roster"),candidates=list(result.earlyStory?.candidates).filter(candidate=>{const unit=native.get(candidate?.rawcode);if(!code(candidate?.rawcode)||seen.has(candidate.rawcode)||unit?.playable!==true||!["전설","히든"].includes(unit.tier))return false;seen.add(candidate.rawcode);return true;}).slice(0,3);
   for(const [index,candidate]of candidates.entries()){
@@ -190,7 +190,7 @@ function create(options){
    if(finite(progress?.percent)){const percent=done?100:bound(progress.percent),reachable=done?100:Math.max(percent,bound(finite(progress.choiceReachablePercent)?progress.choiceReachablePercent:percent)),track=el("span","ord-na-progress"),current=el("span","ord-na-progress-current"),choice=el("span","ord-na-progress-choice");current.style.width=percent+"%";choice.style.left=percent+"%";choice.style.width=reachable-percent+"%";choice.dataset.ready=String(progress.canCompleteWithChoiceWisp===true&&reachable>=100);track.append(current,choice);name.append(track,el("span","",Math.round(percent)+"% "+unitName));}else name.textContent=unitName;
    name.type="button";name.disabled=typeof options.onOpenUnit!=="function";name.setAttribute("aria-label",unitName+" 상세");name.addEventListener("click",()=>{if(!destroyed&&!name.disabled)options.onOpenUnit(candidate.rawcode);});row.append(el("span","ord-na-number",index+1),name,el("span","ord-na-count","보유 "+owned+" / "+required));
    if(!done){const candidateTarget=goalTargetFor(candidate.rawcode),last=list(candidateTarget?.expectedSteps).at(-1),whole=candidateTarget?.isWholeGoal===true&&candidateTarget.towardRawcode===candidate.rawcode&&candidateTarget.available===true&&candidateTarget.protectedCounts&&typeof candidateTarget.protectedCounts==="object"&&!Array.isArray(candidateTarget.protectedCounts)&&last?.type==="craft"&&list(state.catalog?.recipes).some(recipe=>String(recipe.id)===String(last.recipeId)&&recipe.resultUnitRawcode===candidate.rawcode),target=whole?candidateTarget:null,action=el("button","ord-na-action","조합");action.type="button";action.disabled=!enabled(target);action.setAttribute("aria-label",unitName+" 조합");action.title=enabled(target)?"필요한 재료부터 "+unitText(unit,text(unit.displayName)||"목표 유닛")+"까지 조합":"현재는 조합할 수 없습니다.";action.addEventListener("click",()=>request(target,candidate.rawcode));row.append(action);}
-   const referenceRank=historicalReference&&Number.isSafeInteger(candidate.storyRank)&&candidate.storyRank>0?"참고 "+candidate.storyRank+"위":null;
+   const referenceRank=storyRanking&&Number.isSafeInteger(candidate.storyRank)&&candidate.storyRank>0?"스토리 "+candidate.storyRank+"위":null;
    row.append(el("span","ord-na-unit-state",done?"보유":referenceRank||"대기"));grid.append(row);
   }
   panel.append(grid);if(brulee)renderBrulee(brulee);appendCraftMessage();
@@ -367,7 +367,7 @@ function create(options){
   const progress=goals.find(candidate=>candidate.rawcode===target?.rawcode)?.progress||goal?.progress;
   const percent=finite(progress?.percent)?Math.round(Math.max(0,Math.min(100,progress.percent))):null;
   const early=state.result.phase==="early_story"?state.result.earlyStory:null;
-  const purpose=early?.historicalStoryReference===true&&Number.isSafeInteger(goal?.storyRank)?"스토리 참고 "+goal.storyRank+"위":
+  const purpose=early?.storyRanking===true&&Number.isSafeInteger(goal?.storyRank)?(typeof early.storyLabel==="string"&&early.storyLabel?early.storyLabel+" ":"")+"스토리 "+goal.storyRank+"위":
    early?(early.materialOnly?"첫 전설·히든 · 재료 기준":"초반 스토리 준비"):"목표 덱 제작 순서";
   const next=target&&target.rawcode!==unit?.rawcode?"다음 "+unitText(target,text(target.name)||""):null;
   return {title:name+" 조합",detail:[purpose,next,cost(target)].filter(Boolean).join(" · "),percent,

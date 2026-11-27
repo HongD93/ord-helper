@@ -44,7 +44,7 @@ async function checkBoard() {
     'let catalog,catalogError=false,nativeUnitDescriptions,displayGroups,recipeGraph,startingEvolutionForecast,boardGroups,latestSnapshot;',
     'const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),sections=new Map();',
     section('const canonicalTiers', 'const unstableStatuses'),
-    section('function normalizeTier', 'function normalizeStoryRankings'),
+    section('function normalizeTier', 'function renderStoryRank('),
     section('function groupColumn', 'function updateStatus'),
     section('async function fetchNativeUnitDescriptions', 'function toast'),
     'loadCatalog()'
@@ -82,7 +82,7 @@ async function checkCombatInventory() {
     'const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),sections=new Map();',
     section('const canonicalTiers','const unstableStatuses'),
     'const unstableStatuses=new Set(["units_changed","world_changed","partial_read"]);',
-    section('function normalizeTier','function normalizeStoryRankings'),
+    section('function normalizeTier','function renderStoryRank('),
     section('function groupColumn','function updateStatus'),
     section('function setLiveState','function flash'),
     section('function applySnapshot','function openDetail'),
@@ -218,7 +218,7 @@ function checkStarter() {
   assert.notEqual(strategy.recommend(counts,{...settings,materialStarter:false}).phase,'early_story');
 }
 
-function checkHistoricalStarterRanks() {
+function checkStoryRankStarters() {
   const Strategy = require(path.join(web,'nightmare-strategy.js'));
   const sourceHash = '0794996c9bc73eaa3020f20ebc45fb37cfa64a6e98ffe8aa0dfa3b356e77bc5c';
   const starters = Array.from({length:8},(_,index)=>unit(`l00${index+1}`,'전설',`전설 ${index+1}`));
@@ -228,11 +228,8 @@ function checkHistoricalStarterRanks() {
   }))};
   const records = {schemaVersion:1,catalogMapHash:classicHash,records:[],
     projection:{kind:'historical_roster_identity',sourceMapHash:sourceHash,sourceRevision:oldHash}};
-  const rankings = {schemaVersion:1,catalogMapHash:sourceHash,measurementVersion:'2.323[C]',
-    sourceExperimentVersion:'2.305',conditions:{difficulty:'악몽',story:'마린포드',durationSeconds:60,
-      startingHealthPercent:100,buffPolicy:'cooldown',holdControl:false},
-    entries:starters.map((entry,index)=>({rawcode:entry.rawcode,catalogName:entry.displayName,tier:entry.tier,
-      rank:index+1,metric:'damage_percent',value:90-index}))};
+  const rankings = {schemaVersion:1,catalogMapHash:classicHash,groups:[{id:'9',label:'전설·히든·왜곡·변화·세라핌',stories:[9],rowCount:8,
+    units:starters.map((entry,index)=>({rawcode:entry.rawcode,tier:entry.tier,ranks:{9:index+1},seconds:{9:60+index}}))}]};
   const settings = {round:10,wood:0,gold:0,materialStarter:true,
     supportedRecipeIds:current.recipes.map(recipe=>recipe.id)};
   const recommend = data => Strategy.create(current,{}, {},records,{
@@ -241,22 +238,25 @@ function checkHistoricalStarterRanks() {
 
   const result = recommend(rankings);
   assert.equal(result.earlyStory.materialOnly,true);
-  assert.equal(result.earlyStory.historicalStoryReference,true);
+  assert.equal(result.earlyStory.storyRanking,true);
+  assert.equal(result.earlyStory.storyLabel,'전설·히든·왜곡·변화·세라핌');
   assert.equal(result.earlyStory.sourceCandidateCount,8);
   assert.equal(result.earlyStory.evaluatedCandidateCount,2);
   assert.equal(result.earlyStory.relativeQualityFraction,.25);
-  assert.equal(result.earlyStory.storyMeasurementVersion,null);
   assert.deepEqual(result.earlyStory.candidates.map(entry=>[entry.rawcode,entry.storyRank]),[['l002',2],['l001',1]]);
-  assert(result.earlyStory.candidates.every(entry=>entry.storyDamagePercent===undefined));
   assert.deepEqual(result.craftTargets[0].expectedSteps,[{type:'craft',recipeId:'R002'}]);
 
-  const wrongHash = recommend({...rankings,catalogMapHash:futureHash});
-  assert.equal(wrongHash.earlyStory.historicalStoryReference,undefined);
-  assert.equal(wrongHash.earlyStory.sourceCandidateCount,8);
-  assert(wrongHash.earlyStory.candidates.every(entry=>entry.storyRank===undefined));
-  for(const mismatch of [{catalogName:'다른 유닛'},{tier:'히든'},{metric:'completion_seconds'}]){
-    const mismatchedUnit = recommend({...rankings,entries:rankings.entries.map(entry=>
-      entry.rawcode==='l002'?{...entry,...mismatch}:entry)});
+  // 이전 맵 해시의 순위와 예전 마린포드 형식은 쓰지 않고 재료 기준 후보로 돌아간다.
+  for(const data of [{...rankings,catalogMapHash:sourceHash},{schemaVersion:1,catalogMapHash:classicHash,conditions:{story:'마린포드'},
+    entries:starters.map((entry,index)=>({rawcode:entry.rawcode,catalogName:entry.displayName,tier:entry.tier,rank:index+1,metric:'damage_percent',value:90-index}))}]){
+    const fallback = recommend(data);
+    assert.equal(fallback.earlyStory.storyRanking,undefined);
+    assert.equal(fallback.earlyStory.sourceCandidateCount,8);
+    assert(fallback.earlyStory.candidates.every(entry=>entry.storyRank===undefined));
+  }
+  for(const mismatch of [{tier:'히든'},{ranks:{9:99}}]){
+    const mismatchedUnit = recommend({...rankings,groups:[{...rankings.groups[0],units:rankings.groups[0].units.map(entry=>
+      entry.rawcode==='l002'?{...entry,...mismatch}:entry)}]});
     assert.deepEqual(mismatchedUnit.earlyStory.candidates.map(entry=>entry.rawcode),['l003','l001']);
   }
 }
@@ -351,7 +351,7 @@ async function run() {
     await checkAdvisorCombatInventory();
   }
   checkStarter();
-  checkHistoricalStarterRanks();
+  checkStoryRankStarters();
   await checkRecordGroups();
   checkUiTrace();
   if(fs.existsSync(path.join(web,'data','map-catalog.json')))checkCombatTargets();
