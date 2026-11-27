@@ -43,8 +43,9 @@ function progressionAction(catalog,snapshot,counts){
 }
 function normalize(value){
  const optional=(n,min)=>n===null||n===undefined||n===""?null:Number.isFinite(Number(n))&&Number(n)>=min?Math.floor(Number(n)):null;
- const kingPathMode=Object.hasOwn(value,"kingPathMode")?(kingPathModes.has(value.kingPathMode)?value.kingPathMode:"off"):value.includeKingPathDecks===true?"standard":"off";
- return{boss:Object.hasOwn(elders,value.boss)||value.boss==="none"?value.boss:"unknown",round:optional(value.round,1),wood:optional(value.wood,0),direction:Object.hasOwn(lanes,value.direction)?value.direction:"all",preferredDeckId:text(value.preferredDeckId).slice(0,160)||null,kingPathMode,includeKingPathDecks:kingPathMode!=="off",includeMysteriousDecks:value.includeMysteriousDecks===true,reinforcementRole:reinforcementRoles.has(value.reinforcementRole)?value.reinforcementRole:"auto"};
+ const includeQuattroMission=value.includeQuattroMission===true;
+ const kingPathMode=includeQuattroMission?"off":Object.hasOwn(value,"kingPathMode")?(kingPathModes.has(value.kingPathMode)?value.kingPathMode:"off"):value.includeKingPathDecks===true?"standard":"off";
+ return{boss:Object.hasOwn(elders,value.boss)||value.boss==="none"?value.boss:"unknown",round:optional(value.round,1),wood:optional(value.wood,0),direction:Object.hasOwn(lanes,value.direction)?value.direction:"all",preferredDeckId:text(value.preferredDeckId).slice(0,160)||null,kingPathMode,includeKingPathDecks:kingPathMode!=="off",includeMysteriousDecks:value.includeMysteriousDecks===true,includeQuattroMission,reinforcementRole:reinforcementRoles.has(value.reinforcementRole)?value.reinforcementRole:"auto"};
 }
 function create(options){
  const host=options?.host;if(!host||typeof host.append!=="function")throw new TypeError("A panel host is required.");
@@ -58,10 +59,12 @@ function create(options){
   style.textContent+=".ord-na-reinforcements{margin-top:6px;padding-top:6px;border-top:1px solid #ece5f2}.ord-na-reinforcement-head{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:5px}.ord-na-reinforcement-role{padding:3px 6px;border:1px solid #ded5ea;border-radius:3px;background:#fff;color:#8d7d9e;font:inherit;cursor:pointer}.ord-na-reinforcement-role[aria-pressed=true]{background:#eee8fb;color:#6246a2}.ord-na-reinforcement-unit{grid-template-columns:minmax(0,1fr) auto}.ord-na-reinforcement-unit .ord-na-action{grid-column:2;grid-row:auto}.ord-na-reinforcement-owned{color:#7d9a86;font-size:9px}";
   (doc.head||doc.documentElement).append(style);
  }
- const kingPathStorageKey="ord-nightmare-king-path-mode-v2",legacyKingPathStorageKey="ord-nightmare-include-king-path-v1",mysteriousStorageKey="ord-nightmare-include-mysterious-v1";
+ const kingPathStorageKey="ord-nightmare-king-path-mode-v2",legacyKingPathStorageKey="ord-nightmare-include-king-path-v1",mysteriousStorageKey="ord-nightmare-include-mysterious-v1",quattroStorageKey="ord-nightmare-include-quattro-v1";
  let storedKingPathMode="off";try{const stored=root.localStorage?.getItem(kingPathStorageKey);if(stored!==null&&stored!==undefined){let value;try{value=JSON.parse(stored);}catch{value=stored;}storedKingPathMode=kingPathModes.has(value)?value:"off";}else if(JSON.parse(root.localStorage?.getItem(legacyKingPathStorageKey)||"false")===true)storedKingPathMode="standard";}catch{}
  const initialSettings={...(options.settings||{})};if(!Object.hasOwn(initialSettings,"kingPathMode")&&!Object.hasOwn(initialSettings,"includeKingPathDecks"))initialSettings.kingPathMode=storedKingPathMode;
- if(!Object.hasOwn(initialSettings,"includeMysteriousDecks")){try{initialSettings.includeMysteriousDecks=JSON.parse(root.localStorage?.getItem(mysteriousStorageKey)||"false")===true;}catch{initialSettings.includeMysteriousDecks=false;}}
+ for(const [key,storageKey] of [["includeMysteriousDecks",mysteriousStorageKey],["includeQuattroMission",quattroStorageKey]]){
+  if(!Object.hasOwn(initialSettings,key)){try{initialSettings[key]=JSON.parse(root.localStorage?.getItem(storageKey)||"false")===true;}catch{initialSettings[key]=false;}}
+ }
  let settings=normalize(initialSettings),state={connected:false,result:null,calculating:false,error:null,craftAvailable:false,craftRunning:false,craftMessage:"",craftTone:"",elder:null},destroyed=false,pending=false,localError="";
  let deckSelectionActive=false,deckSelectionNode=null,queuedRender=false;
  let labelCatalog=null,labelUnits=new Map();
@@ -142,7 +145,37 @@ function create(options){
   }
   return lines.join("\n");
  }
-  function appendPathControls(controls){for(const [mode,label]of [["standard","패왕의길"],["martial_law","계엄령"]]){const button=el("button","ord-na-toggle",label);button.type="button";button.setAttribute("aria-label",label+" 덱 포함");button.setAttribute("aria-pressed",String(settings.kingPathMode===mode));button.title="레오 포함 덱 추천";button.addEventListener("click",()=>setSettings({kingPathMode:settings.kingPathMode===mode?"off":mode,preferredDeckId:null},{notify:true}));controls.append(button);}const button=el("button","ord-na-toggle","신비함");button.type="button";button.setAttribute("aria-label","신비함 덱 포함");button.setAttribute("aria-pressed",String(settings.includeMysteriousDecks));button.addEventListener("click",()=>setSettings({includeMysteriousDecks:!settings.includeMysteriousDecks,preferredDeckId:null},{notify:true}));controls.append(button);}
+ function renderGoalCombat(assessment){
+  const parts=[],utility=assessment?.utilityTargets;
+  for(const [label,metric] of [["오라 이감",utility?.slow],["방깎",utility?.armorReduction]]){
+   if(!finite(metric?.target))continue;
+   if(!finite(metric.value))parts.push(label+" 목표 "+metric.target);
+   else parts.push(label+" "+metric.value.toLocaleString("ko-KR")+" / "+metric.target+(metric.complete===false?" (확인분)":""));
+  }
+  const lineDamage=assessment?.lineDamage,estimate=lineDamage?.expectedDamagePerSecond;
+  const showLineDamage=finite(estimate)&&estimate>=0;
+  if(showLineDamage)parts.push("라인딜 기대값 "+Math.round(estimate).toLocaleString("ko-KR")+"/초"+(lineDamage.complete===true?"":" (확인분)"));
+  if(!parts.length)return;
+  const row=el("div","ord-na-next-cost",parts.join(" · "));
+  if(showLineDamage&&lineDamage.scenario?.averageAreaTargets===1&&lineDamage.scenario?.armorAndResistanceIncluded===false){
+   row.title="라인딜은 일반 라인 적 1기 적중 기준 · 방어력·저항 적용 전";
+  }
+  panel.append(row);
+ }
+ function appendPathControls(controls){
+  function appendToggle(label,ariaLabel,pressed,patch,title){
+   const button=el("button","ord-na-toggle",label);
+   button.type="button";button.setAttribute("aria-label",ariaLabel);button.setAttribute("aria-pressed",String(pressed));
+   if(title)button.title=title;
+   button.addEventListener("click",()=>setSettings({...patch(),preferredDeckId:null},{notify:true}));
+   controls.append(button);
+  }
+  for(const [mode,label] of [["standard","패왕의길"],["martial_law","계엄령"]]){
+   appendToggle(label,label+" 덱 포함",settings.kingPathMode===mode,()=>({kingPathMode:settings.kingPathMode===mode?"off":mode,includeQuattroMission:false}),"레오 포함 덱 추천");
+  }
+  appendToggle("신비함","신비함 덱 포함",settings.includeMysteriousDecks,()=>({includeMysteriousDecks:!settings.includeMysteriousDecks}));
+  appendToggle("콰트로 미션","콰트로 미션 목표 덱",settings.includeQuattroMission,()=>({includeQuattroMission:!settings.includeQuattroMission,kingPathMode:"off"}),"최상위 유닛 4기 조합 목표");
+ }
  function appendStop(head){if(state.craftRunning&&state.craftCanStop&&typeof options.onStopCraft==="function"){const stop=el("button","ord-na-action",state.craftStopRequested?"중지 요청 중":"중지");stop.type="button";stop.disabled=state.craftStopRequested===true;stop.setAttribute("aria-label","조합 중지");stop.addEventListener("click",()=>{if(stop.disabled||destroyed)return;try{Promise.resolve(options.onStopCraft()).catch(()=>{localError="중지 요청을 보내지 못했습니다.";render();});}catch{localError="중지 요청을 보내지 못했습니다.";render();}});head.append(stop);}}
  function appendCraftMessage(){const message=localError||text(state.craftMessage)||(busy()?"조합 중":"");if(message){const safe=message.length<=180&&!/[A-Za-z]:[\\/]|stacktrace|\bat \w+[.(]/i.test(message)?message:"조합 상태를 확인해 주세요.";const status=el("div","ord-na-status",safe);status.setAttribute("role","status");if(localError||state.craftTone==="error")status.dataset.tone="error";panel.append(status);}}
  function renderEarlyStory(result){
@@ -236,7 +269,12 @@ function create(options){
   }
   appendPathControls(controls);head.append(controls);
   panel.append(head);
-  if(!deck||result.mapCompatible===false){panel.append(el("div","ord-na-empty",state.calculating?"목표 덱 확인 중":state.error?"목표 덱을 불러오지 못했습니다.":result?.mapCompatible===true?result.searchComplete===false?"현재 패에 맞는 목표 덱을 찾지 못했습니다.":"현재 패로 이어갈 목표 덱이 없습니다.":"현재 맵의 목표 덱을 확인하지 못했습니다."));if(state.error&&options.onRetry){const retry=el("button","ord-na-name","다시 계산");retry.type="button";retry.addEventListener("click",()=>options.onRetry());panel.append(retry);}renderReinforcements(result);return;}
+  if(!deck||result.mapCompatible===false){
+   const unavailable=result?.quattroMissionActive===true?"현재 패로 이어갈 콰트로 목표 덱이 없습니다.":result?.mapCompatible===true?result.searchComplete===false?"현재 패에 맞는 목표 덱을 찾지 못했습니다.":"현재 패로 이어갈 목표 덱이 없습니다.":"현재 맵의 목표 덱을 확인하지 못했습니다.";
+   panel.append(el("div","ord-na-empty",state.calculating?"목표 덱 확인 중":state.error?"목표 덱을 불러오지 못했습니다.":unavailable));
+   if(state.error&&options.onRetry){const retry=el("button","ord-na-name","다시 계산");retry.type="button";retry.addEventListener("click",()=>options.onRetry());panel.append(retry);}
+   renderReinforcements(result);return;
+  }
   const brulee=bruleeAction(result),order=list(result.order).map(item=>typeof item==="string"?item:item.rawcode),positions=new Map(order.map((item,index)=>[item,index+1]));
   const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
   const goals=list(deck.goals).slice().sort((a,b)=>{const x=goalOrder(a),y=goalOrder(b);for(let i=0;i<x.length;i++)if(x[i]!==y[i])return x[i]-y[i];return 0;});
@@ -258,6 +296,7 @@ function create(options){
    row.append(el("span","ord-na-unit-state",done?"보유":"대기"));grid.append(row);
   }
   panel.append(grid);
+  renderGoalCombat(deck.assessment);
   if(combatValidation){
    const summary=el("div","ord-na-next-cost","전투 평가 · 딜 "+combatState(combatValidation.damage)+" · 스턴 "+combatState(combatValidation.control?.stun)+" · 이감 "+combatState(combatValidation.control?.slow)+" · 마나·회복 "+combatState(combatValidation.mana));
    summary.title=combatTooltip(combatValidation,deck);
@@ -301,7 +340,16 @@ function create(options){
   if(opportunities.length){const details=el("details","ord-na-condition"),ul=el("ul");details.append(el("summary","","신비함 대안"));for(const item of opportunities){const candidate=alternatives.find(d=>list(item.templateIds).includes(d.id)&&d.mode===deck.mode)||alternatives.find(d=>list(item.templateIds).includes(d.id)),li=el("li"),button=el("button","ord-na-name",unitText(item,text(item.name)||"신비함"));button.type="button";button.disabled=!candidate||busy()||state.calculating;button.setAttribute("aria-label",button.textContent+" 활용 덱 비교");button.addEventListener("click",()=>{if(candidate&&!button.disabled)setSettings({preferredDeckId:candidate.id},{notify:true});});li.append(button,el("span",""," · "+(item.ownedResult>0?"보유 "+item.ownedResult:"재료 "+(item.ownedSource||0))+(item.ownedResult>0?"":item.automaticCraftSupported?"":" · 수동 조합")));ul.append(li);}details.append(ul);panel.append(details);}
   renderReinforcements(result);appendCraftMessage();
  }
-  function setSettings(patch,config={}){if(destroyed)return;const values={...settings,...patch};if(!Object.hasOwn(patch,"kingPathMode")&&Object.hasOwn(patch,"includeKingPathDecks"))values.kingPathMode=patch.includeKingPathDecks===true?"standard":"off";const next=normalize(values),changed=JSON.stringify(next)!==JSON.stringify(settings);if(next.kingPathMode!==settings.kingPathMode){try{root.localStorage?.setItem(kingPathStorageKey,JSON.stringify(next.kingPathMode));}catch{}}if(next.includeMysteriousDecks!==settings.includeMysteriousDecks){try{root.localStorage?.setItem(mysteriousStorageKey,JSON.stringify(next.includeMysteriousDecks));}catch{}}settings=next;if(changed)render();if(config.notify&&changed)options.onSettingsChange?.({...settings});}
+ function setSettings(patch,config={}){
+  if(destroyed)return;
+  const values={...settings,...patch};
+  if(!Object.hasOwn(patch,"kingPathMode")&&Object.hasOwn(patch,"includeKingPathDecks"))values.kingPathMode=patch.includeKingPathDecks===true?"standard":"off";
+  const next=normalize(values),changed=JSON.stringify(next)!==JSON.stringify(settings);
+  for(const [key,storageKey] of [["kingPathMode",kingPathStorageKey],["includeMysteriousDecks",mysteriousStorageKey],["includeQuattroMission",quattroStorageKey]]){
+   if(next[key]!==settings[key]){try{root.localStorage?.setItem(storageKey,JSON.stringify(next[key]));}catch{}}
+  }
+  settings=next;if(changed)render();if(config.notify&&changed)options.onSettingsChange?.({...settings});
+ }
  function overlayRecommendation(){
   if(destroyed||!state.connected)return null;
   if(state.craftRunning)return {title:"조합 중",detail:state.craftStopRequested?"중지 요청 중":"결과를 확인한 뒤 다시 추천합니다.",percent:null,

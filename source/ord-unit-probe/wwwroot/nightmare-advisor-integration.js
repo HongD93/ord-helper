@@ -3,6 +3,7 @@
   const evidenceHash=value=>typeof value==="string"&&/^[a-f0-9]{64}$/.test(value);
   const combatInventories = new WeakMap();
   const classic2331Hash = "20ce1b0918e56d18ad02a11a6dddf05298d6478037721f20a29702d4cd7b145d";
+  const materialCombatForms = new Map([["H0B3","H0B2"],["h07J","h07L"]]);
   function configureCombatInventory(catalog,data) {
     combatInventories.delete(catalog);
     if (catalog?.map?.sha256!==classic2331Hash||data?.schemaVersion!==1||data.mapSha256!==classic2331Hash||
@@ -29,10 +30,13 @@
     if(temporary.size!==data.temporaryRawcodes.length||
        [...temporary].some(code=>!units.has(code)||recipeMaterials.has(code)||recipeResults.has(code)||progressSources.has(code)||progressResults.has(code))||
        [...aliases].some(([form,canonical])=>units.get(form)?.playable!==true||units.get(canonical)?.playable!==true||
-         recipeMaterials.has(form)||recipeMaterials.has(canonical)||recipeResults.has(form)||progressSources.has(form)||
+         (recipeMaterials.has(form)||recipeMaterials.has(canonical))&&materialCombatForms.get(form)!==canonical||
+         recipeResults.has(form)||progressSources.has(form)||
          progressResults.has(form)||progressResults.has(canonical)||
          temporary.has(form)||temporary.has(canonical)||aliases.has(canonical)))return null;
     const equivalent=new Set([...aliases.keys(),...aliases.values()]);
+    const materialAliases=new Map([...aliases].filter(([form,canonical])=>materialCombatForms.get(form)===canonical));
+    const materialProtectionCodes=new Set([...materialAliases.keys(),...materialAliases.values()]);
     const identity=Object.freeze({
       workerMetadata:Object.freeze({schemaVersion:1,mapSha256:classic2331Hash,
         canonicalByRawcode:Object.freeze(Object.fromEntries(aliases))}),
@@ -49,9 +53,18 @@
         return result;
       },
       nativeProtection(counts){
-        // Neither side of these identity pairs can be selected or consumed by a recipe.
-        // Keeping a specific form in a native request would abort on a harmless combat transition.
-        return counts&&Object.fromEntries(Object.entries(counts).filter(([code])=>!equivalent.has(code)));
+        if(!counts)return counts;
+        const result={};
+        for(const [code,count]of Object.entries(counts)){
+          // 재료로 쓰이는 두 변신쌍은 기본형 수량을 보존한다. 다른 전투 변신은 개별 형태를 보호하지 않는다.
+          if(equivalent.has(code)&&!materialProtectionCodes.has(code))continue;
+          if(!Number.isSafeInteger(count)||count<1)return counts;
+          const canonical=materialAliases.get(code)||code;
+          const total=(result[canonical]||0)+count;
+          if(!Number.isSafeInteger(total))return counts;
+          result[canonical]=total;
+        }
+        return result;
       }
     });
     combatInventories.set(catalog,identity);
@@ -94,6 +107,7 @@
   }
   function create(options) {
     let state = null, combat = null, mechanics = null, clearRecords = null, rewardData = null, randomDrops = null, combatValidation = null, storyRankings = null, bruleeCopy = null, utilityCombat = null, worker = null, ready = false, busy = false;
+    let utilityTargetsProfile = null, lineDamageProfile = null;
     let revision = 0, signature = "", session = "", initializedMap = "", loading = false;
     let timer = null, timeout = null, pending = null, result = null, failed = false, destroyed = false;
     let firstInvestment = null, investmentBaseline = null, investmentAmbiguous = false, starterPhaseSeen = false, manualDeckChoice = false, manualDeckChoiceRevision = 0, lastSemanticKey = "", lastBudget = null, blockingRecompute = true, resourceRefreshPending = false;
@@ -346,7 +360,7 @@
       };
       const inventory=combatInventory(state.catalog);
       const workerCatalog=inventory?{...state.catalog,combatInventory:inventory.workerMetadata}:state.catalog;
-      try { worker.postMessage({type:"init", catalog:workerCatalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,bruleeCopy,utilityCombat,
+      try { worker.postMessage({type:"init", catalog:workerCatalog, combat:nativeData?combat:{},rules:nativeData?mechanics:{},clearRecords,storyRankings,bruleeCopy,utilityCombat,utilityTargetsProfile,lineDamageProfile,
         ...(nativeData?{randomDrops,combatValidation}:{}),recordsRevision:activeRecordsRevision}); }
       catch {
         stopWorker(); pending = null; result = null; failed = true;
@@ -473,10 +487,15 @@
       loading = true; show();
       Promise.all(["/data/nightmare-combat.json","/data/nightmare-rules.json","/data/nightmare-clear-records.json"].map(url=>
         fetch(url,{cache:"no-store"}).then(response=>{if(!response.ok)throw new Error("combat_profile_unavailable");return response.json();})
-      ).concat(["/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json","/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json","/data/brulee-copy-2.331.json","/data/nightmare-utility-combat-2.331.json"].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history,copyProfile,utilityProfile]) => {
+      ).concat([
+        "/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json",
+        "/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json","/data/brulee-copy-2.331.json",
+        "/data/nightmare-utility-combat-2.331.json","/data/nightmare-utility-targets-2.331.json","/data/nightmare-line-damage-2.331.json"
+      ].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history,copyProfile,utilityProfile,utilityTargetData,lineDamageData]) => {
         if (destroyed) return;
         historicalRecords=history?.schemaVersion===1&&Array.isArray(history.records)&&history.records.length?history:null;
         bruleeCopy=copyProfile;utilityCombat=utilityProfile;
+        utilityTargetsProfile=utilityTargetData;lineDamageProfile=lineDamageData;
         loading = false; combat = data; mechanics=rules;if(!publicRecordsData||publicRecordsData.catalogMapHash!==records.catalogMapHash){publicRecordsData=records;publicRecordsRevision=null;localRecordsData=null;localRecordsRevision=null;clearRecords=records;activeRecordsRevision=null;baseRecordIds=(records.records||[]).map(record=>record.id);}rewardData=rewards; randomDrops=drops; combatValidation={unitModels,scenarios,recordEvidence};storyRankings=storyData; failed = false; signature = "";startRecordPolling();schedule(true);
       }).catch(() => {
         if (destroyed) return;

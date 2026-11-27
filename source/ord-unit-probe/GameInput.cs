@@ -35,6 +35,9 @@ static class GameInput
         }
         try
         {
+            if (command.MapHash is not null && !string.Equals(command.MapHash,
+                baseline.GetProperty("loadedMapHash").GetString(), StringComparison.OrdinalIgnoreCase))
+                return "조합 정보와 실행 중인 맵이 달라 입력하지 않았습니다.";
             using var process = Process.GetProcessById(baseline.GetProperty("processId").GetInt32());
             var game = process.Modules.Cast<ProcessModule>().SingleOrDefault(m => m.ModuleName.Equals("Game.dll", StringComparison.OrdinalIgnoreCase));
             if (game?.FileVersionInfo.FileVersion != "1.28.5.7680") return "지원하는 워크래프트 버전을 확인할 수 없습니다.";
@@ -106,17 +109,22 @@ static class GameInput
                 GetWindowThreadProcessId(window, out var initialOwner);
                 if (initialOwner != process.Id) return "게임 창이 바뀌어 입력하지 않았습니다.";
                 observeStage?.Invoke("selecting_recipe_caster");
-                var selected = await GameSelection.EnsureCasterAsync(memory, moduleBase, initial, window, command, active, cancel);
+                var selected = await GameSelection.EnsureCasterAsync(memory, moduleBase, initial, window, command, active, cancel, allowFocusedGroup: true);
                 if (selected.Error is not null) return selected.Error;
+                var selectionBeforeHotkey = GameSelection.ReadSelectedGroupAddresses(memory, initial);
                 observeStage?.Invoke("rechecking_before_hotkey");
                 if (!ReadInventory(out var beforeHotkey) || !HasIngredients(command, beforeHotkey!) || !ItemsPresent() || !ConditionsPresent())
                     return "조합 재료가 바뀌어 입력하지 않았습니다. 보유량을 확인해 주세요.";
+                var currentCasters = beforeHotkey!.Units.Where(unit => UnitRules.IsActive(unit) &&
+                    command.CasterUnitRawcodes.Contains(unit.Rawcode, StringComparer.Ordinal)).ToArray();
                 GetWindowThreadProcessId(window, out var owner);
                 if (owner != process.Id || !NormalMode(memory, moduleBase, initial.Ui) ||
                     KeysHeld() || ((requireForeground || selected.AutomaticallySelected) && GetForegroundWindow() != window) ||
                     !GameSelection.SameSession(initial, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)) ||
-                    GameSelection.ReadSingleSelectedAddress(memory, initial) != selected.Address ||
-                    !SelectedCaster(memory, initial, command)) return "게임이나 선택한 유닛이 바뀌어 입력하지 않았습니다.";
+                    selected.Address is not { } caster || !selectionBeforeHotkey.Contains(caster) ||
+                    GameSelection.ReadReusableCaster(memory, initial, currentCasters, allowFocusedGroup: true) != caster ||
+                    !selectionBeforeHotkey.SequenceEqual(GameSelection.ReadSelectedGroupAddresses(memory, initial)))
+                    return "게임이나 선택한 유닛이 바뀌어 입력하지 않았습니다.";
                 cancel.ThrowIfCancellationRequested();
                 observeStage?.Invoke("posting_recipe_hotkey");
                 PostKey(window, (ushort)command.Hotkey![0]);
@@ -146,9 +154,16 @@ static class GameInput
                 return "채팅창이 열렸는지 확인하지 못해 조합 명령을 입력하지 않았습니다.";
             if (GameChatText.Read(memory, moduleBase, initial).Bytes.Length != 0)
                 return "채팅창에 글자가 남아 있어 조합 명령을 입력하지 않았습니다. 채팅창을 닫고 다시 눌러 주세요.";
-            var typing = await TypeKoreanChatCommandAsync(command.ChatCommand, window, () =>
-                GetForegroundWindow() == window && SameGameWindow() && ChatOpen(memory, moduleBase) && !KeysHeld() &&
-                GameSelection.SameSession(initial, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)),
+            bool ChatTypingContext()
+            {
+                if (!SameGameWindow()) throw new IOException("The game window changed during Korean IME input.");
+                if (!ChatOpen(memory, moduleBase)) throw new IOException("The game chat closed during Korean IME input.");
+                if (KeysHeld()) throw new IOException("A mouse button or modifier was held during Korean IME input.");
+                if (!GameSelection.SameSession(initial, memory.ReadRoots(moduleBase + 0xD326F0, moduleBase + 0xD305E0)))
+                    throw new IOException("The game session changed during Korean IME input.");
+                return true;
+            }
+            var typing = await TypeKoreanChatCommandAsync(command.ChatCommand, window, ChatTypingContext,
                 () => GameChatText.Matches(GameChatText.Read(memory, moduleBase, initial), command.ChatCommand), cancel,
                 stage => TraceChat(stage));
             TraceChat(typing.OriginalImeRestored ? "typing_completed" : "typing_completed_with_ime_warning", typing.RestorationError);
@@ -195,14 +210,14 @@ static class GameInput
         if (!SnapshotStability.SameSession(readRoots(), initial) || second.ReadErrors != 0 || !CraftMaterialChoices.UniqueNativeSource(command, second)) return false;
         var relevantIds = command.Ingredients.Select(ingredient => ingredient.Rawcode)
             .Concat(command.CasterUnitRawcodes).Concat(command.RecipeId == "ET02" ? CraftMaterialChoices.NativeCandidateForms : []).ToHashSet(StringComparer.Ordinal);
-        if (relevantIds.Count > 0 && !SnapshotStability.SameInventory(first, second, relevantIds)) return false;
+        if (relevantIds.Count > 0 && !SnapshotStability.SameInventory(first, second, relevantIds, command.MapHash)) return false;
         owned = second;
         return true;
     }
 
     internal static bool HasIngredients(CraftCommand command, OwnedData owned) => owned.ReadErrors == 0 && CraftMaterialChoices.UniqueNativeSource(command, owned) &&
         command.Ingredients.All(ingredient => owned.Units.Count(unit =>
-            UnitRules.IsActive(unit) && unit.Rawcode == ingredient.Rawcode) >= ingredient.Count);
+            UnitRules.IsActive(unit) && CombatMaterialForms.Canonical(unit.Rawcode, command.MapHash) == ingredient.Rawcode) >= ingredient.Count);
 
     private static bool NormalMode(MemoryReader memory, uint moduleBase, uint ui)
     {
@@ -213,22 +228,6 @@ static class GameInput
         return normal >= 0x10000 && memory.U32(ui + 0x1B4) == normal;
     }
     private static bool ChatOpen(MemoryReader memory, uint moduleBase) => memory.Read(moduleBase + 0xD04FEC, 1)[0] != 0;
-    private static bool SelectedCaster(MemoryReader memory, Roots roots, CraftCommand command)
-    {
-        var player = memory.U32(roots.Players + 0x58 + checked((uint)roots.LocalPlayer * 4));
-        var selection = memory.U32(player + 0x34);
-        if (memory.U32(selection + 0x1F8) != 1) return false;
-        var node = memory.U32(selection + 0x1F0);
-        var unit = memory.U32(node + 8);
-        if (memory.U32(unit + 0x58) != roots.LocalPlayer) return false;
-        var body = memory.Read(unit + 0x20, 0x40);
-        var rawcode = MemoryReader.DecodeRawcode(body.AsSpan(0x10, 4));
-        if (rawcode is null) return false;
-        var item = new UnitObject(unit, rawcode,
-            BitConverter.ToUInt32(body, 0), BitConverter.ToUInt32(body, 0x3C));
-        return UnitRules.IsActive(item) && command.CasterUnitRawcodes.Contains(item.Rawcode, StringComparer.Ordinal) &&
-            memory.U32(selection + 0x1F8) == 1 && memory.U32(selection + 0x1F0) == node && memory.U32(node + 8) == unit;
-    }
     private static bool KeysHeld() => new[] { 1, 2, 4, 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(k => (GetAsyncKeyState(k) & 0x8000) != 0);
     private static Input Key(ushort vk, ushort scan = 0, uint flags = 0) => new() { Type = 1, Data = new InputUnion { Keyboard = new Keyboard { Vk = vk, Scan = scan, Flags = flags } } };
     internal static void PressNormalKey(ushort key) => Press(key);

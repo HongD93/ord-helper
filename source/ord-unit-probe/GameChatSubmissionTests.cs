@@ -149,11 +149,20 @@ static class GameChatSubmissionTests
                 _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(false), default);
             Check(toggles == 1 && reads == 2);
         });
+        await Test("IME conversion control is verified after key attempts fail", async () =>
+        {
+            var toggles = 0; var requests = 0; var waits = 0;
+            var stages = new List<string>();
+            await KoreanImeInput.SwitchToAlphanumericAsync(() => true, () => true,
+                _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(++waits == 3),
+                default, stages.Add, () => requests++);
+            Check(toggles == 2 && requests == 1 && waits == 3 && stages[^1] == "ime_alphanumeric_confirmed_by_control");
+        });
         await Test("IME retry is bounded and does not run with a held key or changed context", async () =>
         {
             foreach (var mode in new[] { "timeout", "held", "changed" })
             {
-                var toggles = 0; var failed = false;
+                var toggles = 0; var requests = 0; var failed = false;
                 try
                 {
                     await KoreanImeInput.SwitchToAlphanumericAsync(() =>
@@ -161,10 +170,11 @@ static class GameChatSubmissionTests
                         if (toggles > 0 && mode == "changed") throw new IOException("mock context changed");
                         return true;
                     }, () => toggles == 0 || mode != "held",
-                    _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(false), default);
+                    _ => { toggles++; return Task.CompletedTask; }, _ => Task.FromResult(false), default,
+                    requestConversionMode: () => requests++);
                 }
                 catch (IOException) { failed = true; }
-                Check(failed && toggles == (mode == "timeout" ? 2 : 1));
+                Check(failed && toggles == (mode == "timeout" ? 2 : 1) && requests == (mode == "timeout" ? 1 : 0));
             }
         });
         await Test("committed text survives an auxiliary IME restoration failure", async () =>

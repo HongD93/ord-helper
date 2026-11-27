@@ -7,19 +7,22 @@ static class SnapshotStability
         current.Ui == expected.Ui && current.Players == expected.Players && current.Table == expected.Table &&
         current.LocalPlayer == expected.LocalPlayer;
 
-    internal static bool SameInventory(OwnedData first, OwnedData? second, IReadOnlySet<string> inventoryIds) =>
-        SameLiveInventory(first, second, inventoryIds, null);
+    internal static bool SameInventory(OwnedData first, OwnedData? second, IReadOnlySet<string> inventoryIds, string? materialMapHash = null) =>
+        SameLiveInventory(first, second, inventoryIds, null, materialMapHash);
 
-    internal static bool SameLiveInventory(OwnedData first, OwnedData? second, IReadOnlySet<string> inventoryIds, LiveInventoryIdentity? identity)
+    internal static bool SameLiveInventory(OwnedData first, OwnedData? second, IReadOnlySet<string> inventoryIds, LiveInventoryIdentity? identity,
+        string? materialMapHash = null)
     {
         if (second is null || first.ReadErrors != 0 || second.ReadErrors != 0) return false;
         return Relevant(first).SequenceEqual(Relevant(second));
 
         IEnumerable<(uint Address, string Rawcode)> Relevant(OwnedData data) => data.Units
             .Where(unit => UnitRules.IsActive(unit) && !UnitRules.IsNonIngredientCombatObject(unit.Rawcode) &&
-                (inventoryIds.Count == 0 || inventoryIds.Contains(unit.Rawcode)) &&
+                (inventoryIds.Count == 0 || inventoryIds.Contains(unit.Rawcode) ||
+                    inventoryIds.Contains(CombatMaterialForms.Canonical(unit.Rawcode, materialMapHash))) &&
                 identity?.Temporary.Contains(unit.Rawcode) != true)
-            .Select(unit => (unit.Address, Rawcode: identity?.Canonical.GetValueOrDefault(unit.Rawcode) ?? unit.Rawcode))
+            .Select(unit => (unit.Address, Rawcode: identity?.Canonical.GetValueOrDefault(unit.Rawcode) ??
+                CombatMaterialForms.Canonical(unit.Rawcode, materialMapHash)))
             .OrderBy(unit => unit.Address).ThenBy(unit => unit.Rawcode, StringComparer.Ordinal);
     }
 }
@@ -96,7 +99,8 @@ sealed class LiveInventoryIdentity
                 if (form.Value.GetString() is not { } original || form.Name == original ||
                     !inventoryIds.Contains(form.Name) || !inventoryIds.Contains(original) ||
                     temporary.Contains(form.Name) || temporary.Contains(original) ||
-                    commandCodes.Contains(form.Name) || commandCodes.Contains(original) ||
+                    (commandCodes.Contains(form.Name) || commandCodes.Contains(original)) &&
+                        !CombatMaterialForms.IsPair(form.Name, original, mapHash) ||
                     progressSources.Contains(form.Name) || progressResults.Contains(form.Name) || progressResults.Contains(original) ||
                     resultCodes.Contains(form.Name) || !canonical.TryAdd(form.Name, original)) return null;
             }
