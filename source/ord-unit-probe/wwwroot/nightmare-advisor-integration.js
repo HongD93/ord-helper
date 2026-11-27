@@ -489,7 +489,7 @@
         fetch(url,{cache:"no-store"}).then(response=>{if(!response.ok)throw new Error("combat_profile_unavailable");return response.json();})
       ).concat([
         "/data/nightmare-rewards.json","/data/nightmare-random-drops.json","/data/nightmare-unit-combat-models.json","/data/nightmare-combat-scenarios.json",
-        "/data/nightmare-combat-record-evidence.json","/data/nightmare-story-rankings.json","/data/nightmare-historical-records.json","/data/brulee-copy-2.331.json",
+        "/data/nightmare-combat-record-evidence.json","/data/nightmare-story-speed-2.331.json","/data/nightmare-historical-records.json","/data/brulee-copy-2.331.json",
         "/data/nightmare-utility-combat-2.331.json","/data/nightmare-utility-targets-2.331.json","/data/nightmare-line-damage-2.331.json"
       ].map(url=>fetch(url,{cache:"no-store"}).then(response=>response.ok?response.json():null).catch(()=>null)))).then(([data,rules,records,rewards,drops,unitModels,scenarios,recordEvidence,storyData,history,copyProfile,utilityProfile,utilityTargetData,lineDamageData]) => {
         if (destroyed) return;
