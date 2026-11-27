@@ -10,7 +10,7 @@ record CraftIngredient(string Rawcode, int Count, string[]? AcceptedRawcodes = n
 record CraftCommand(string RecipeId, string ResultRawcode, int ResultCount,
     CraftIngredient[] Ingredients, string? ChatCommand, string? Hotkey, string[] CasterUnitRawcodes,
     int WoodCost = 0, int GoldCost = 0, CraftIngredient[]? ItemRequirements = null, CraftRecipeCondition[]? Conditions = null,
-    string? MaterialChoiceRawcode = null);
+    string? MaterialChoiceRawcode = null, string? MapHash = null);
 
 sealed class GameCraftService
 {
@@ -117,7 +117,8 @@ sealed class GameCraftService
                     .Select(item => new CraftRecipeCondition(item.GetProperty("type").GetString()!, RequiredRawcode(item, "rawcode"), item.GetProperty("count").GetInt32())).ToArray();
                 if (conditions.Any(item => item.Count is < 1 or > 1000)) throw new InvalidDataException("Invalid recipe condition.");
                 var command = new CraftCommand(id, result, resultCount, ingredients,
-                    chatCommands.GetValueOrDefault(id), hotkey, casters, ResourceCost("WOOD"), ResourceCost("GOLD"), itemRequirements, conditions);
+                    chatCommands.GetValueOrDefault(id), hotkey, casters, ResourceCost("WOOD"), ResourceCost("GOLD"), itemRequirements, conditions,
+                    MapHash: catalogHash);
                 if (ingredients.Any(item => item.AcceptedRawcodes is not null) &&
                     (catalogHash != GameProgression.SupportedMapHash || !CraftMaterialChoices.TryResolve(command, "H099", out _)))
                     throw new InvalidDataException("Unverified map-specific material choice.");
@@ -631,7 +632,8 @@ sealed class GameCraftService
         foreach (var item in supplied)
         {
             if (!IsRawcode(item.Key) || !characterRawcodes.Contains(item.Key) || item.Value is < 1 or > 1000) return false;
-            normalized.Add(item.Key, item.Value);
+            var canonical = CombatMaterialForms.Canonical(item.Key, catalogHash);
+            normalized[canonical] = checked(normalized.GetValueOrDefault(canonical) + item.Value);
         }
         return true;
     }
@@ -751,8 +753,9 @@ sealed class GameCraftService
             var count = unit.GetProperty("count").GetInt32();
             if (count < 0 || count > 100000) return false;
             counts.Add(rawcode, count);
-            if (Bool(unit, "isCharacter")) characters.Add(rawcode);
+            if (Bool(unit, "isCharacter")) characters.Add(CombatMaterialForms.Canonical(rawcode, catalogHash));
         }
+        counts = CombatMaterialForms.Normalize(counts, catalogHash);
         snapshot = new Snapshot(root, sequence, session, counts, characters);
         return true;
     }

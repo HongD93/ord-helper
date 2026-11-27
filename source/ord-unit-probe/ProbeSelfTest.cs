@@ -55,6 +55,14 @@ static class ProbeSelfTest
             Check(GameSelection.ReadPortraitCaster(reader, fixture.UiAddress, roots, portraitGeometry, casterGroup,
                 fixture.FirstUnitAddress) == fixture.FirstUnitAddress, "a locked portrait identity survives a different first matching HUD unit");
             Focus("hud-focus-second", fixture.SecondUnitAddress, "active representative follows its exact address rather than the first selected node");
+            Check(GameSelection.ReadReusableCaster(reader, roots, casterGroup, allowFocusedGroup: true) is null,
+                "an active subgroup with multiple units of its type still needs isolation");
+            Focus("hud-focus-unique", fixture.SecondUnitAddress, "the representative can be the only unit of its type in the group");
+            Check(GameSelection.ReadReusableCaster(reader, roots, casterGroup, allowFocusedGroup: true) == fixture.SecondUnitAddress &&
+                GameSelection.ReadReusableCaster(reader, roots, casterGroup) is null,
+                "only the recipe hotkey path opts into the verified focused group caster");
+            Check(GameSelection.ReadReusableCaster(reader, roots, [casterGroup.Single(unit => unit.Address == fixture.FirstUnitAddress)],
+                allowFocusedGroup: true) is null, "focus on a different unit cannot authorize the recipe");
             Focus("hud-focus-outside", null, "a stale active pointer outside the selected set is rejected");
             Portrait("hud-valid", fixture.SecondUnitAddress, "HUD can recover after a stale active representative");
             Portrait("hud-hidden", null, "a hidden target HUD button cannot be used", fixture.SecondUnitAddress);
@@ -266,6 +274,11 @@ static class ProbeSelfTest
                     {
                         case "hud-valid": break;
                         case "hud-focus-second": Write(selection + 0x1E0, b + 0x5200); break;
+                        case "hud-focus-unique":
+                            Write(secondNode + 8, b + 0x5600);
+                            Write(node + 8, b + 0x5200);
+                            Write(selection + 0x1E0, b + 0x5200);
+                            break;
                         case "hud-focus-outside": Write(selection + 0x1E0, b + 0x5400); break;
                         case "hud-hidden": Write(b + 0xB000 + 0x94, 0); break;
                         case "hud-stale-child": Write(b + 0xB200 + 0x6A0, b + 0x5000); break;

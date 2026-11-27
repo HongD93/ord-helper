@@ -38,7 +38,12 @@ static class KoreanImeInput
                         () => { target.EnsureInput(); return target.ReadState().Native; },
                         () => HangulKeyReleased(pressed),
                         token => PressHangulAsync(target, pressed, token),
-                        token => WaitStateAsync(target, state => !state.Native, token), cancel, trace);
+                        token => WaitStateAsync(target, state => !state.Native, token), cancel, trace,
+                        () =>
+                        {
+                            var current = target.ReadState();
+                            if (current.Native) target.SendControl(2, current.Conversion & ~NativeMode, requireInput: true);
+                        });
                 }
                 else { Press(target, step.Key.VirtualKey, step.Key.Shift, pressed); await Task.Delay(18, cancel); }
             }
@@ -93,7 +98,7 @@ static class KoreanImeInput
 
     internal static async Task SwitchToAlphanumericAsync(Func<bool> nativeMode, Func<bool> keyReleased,
         Func<CancellationToken, Task> toggle, Func<CancellationToken, Task<bool>> waitForAlphanumeric,
-        CancellationToken cancel, Action<string>? trace = null)
+        CancellationToken cancel, Action<string>? trace = null, Action? requestConversionMode = null)
     {
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -106,6 +111,18 @@ static class KoreanImeInput
             if (await waitForAlphanumeric(cancel))
             {
                 Trace(trace, "ime_alphanumeric_confirmed");
+                return;
+            }
+        }
+        cancel.ThrowIfCancellationRequested();
+        if (requestConversionMode is not null && keyReleased())
+        {
+            if (!nativeMode()) return;
+            Trace(trace, "requesting_ime_alphanumeric_control");
+            requestConversionMode();
+            if (await waitForAlphanumeric(cancel))
+            {
+                Trace(trace, "ime_alphanumeric_confirmed_by_control");
                 return;
             }
         }
@@ -238,8 +255,8 @@ static class KoreanImeInput
         internal void EnsureInput()
         {
             EnsureIdentity();
-            if (GetForegroundWindow() != window || !inputValid())
-                throw new IOException("The foreground game chat or session changed during Korean IME input.");
+            if (GetForegroundWindow() != window) throw new IOException("The game window lost focus during Korean IME input.");
+            if (!inputValid()) throw new IOException("The game input context changed during Korean IME input.");
         }
 
         private void EnsureIdentity()

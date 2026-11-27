@@ -8,7 +8,8 @@ using Microsoft.Extensions.Logging;
 static class GameCraftSequenceTests
 {
     private static readonly string Hash = new('a', 64);
-    private static readonly string[] CharacterCodes = ["b001", "m001", "m002", "g001", "g002", "g003", "g004", "g005", "g006", "g007", "g008", "g009", "x001", "h003", "h002"];
+    private static readonly string[] CharacterCodes = ["b001", "m001", "m002", "g001", "g002", "g003", "g004", "g005", "g006", "g007", "g008", "g009", "x001", "h003", "h002",
+        "H0B2", "H0B3", "h07L", "h07J"];
 
     public static async Task RunAsync()
     {
@@ -658,6 +659,77 @@ static class GameCraftSequenceTests
             Check(Status(result) == "succeeded" && adaptiveBudget.Calls.SequenceEqual(["r001", "r003"]) && adaptiveBudget.Wood == 0 && adaptiveBudget.Gold == 0,
                 "adaptive resource checks use the complete newly shortened suffix rather than a stale reservation");
             passed++;
+
+            WriteCatalog(catalog, aliases, mapHash: GameProgression.SupportedMapHash);
+            var carrotMaterial = new Fixture(new() { ["m001"] = 1, ["h07J"] = 1 }) { MapHash = GameProgression.SupportedMapHash };
+            carrotMaterial.OnExecute = (step, _) =>
+            {
+                Check(step.Ingredients.Any(item => item.Rawcode == "h07L") &&
+                    !step.Ingredients.Any(item => item.Rawcode == "h07J"), "the service plan retains the registered carrot material code");
+                return null;
+            };
+            result = await Execute(carrotMaterial, "r012");
+            Check(Status(result) == "succeeded" && carrotMaterial.Count("h07J") == 0 && carrotMaterial.Count("g001") == 1 &&
+                carrotMaterial.Calls.SequenceEqual(["r012"]), "a recipe can consume the real transformed carrot without losing the raw executor snapshot");
+            passed++;
+            foreach (var (canonical, form) in new[] { ("H0B2", "H0B3"), ("h07L", "h07J") })
+            {
+                foreach (var adaptive in new[] { false, true })
+                {
+                    foreach (var startTransformed in new[] { false, true })
+                    {
+                        var source = startTransformed ? form : canonical;
+                        var target = startTransformed ? canonical : form;
+                        var transformed = new Fixture(new() { ["b001"] = 4, [source] = 1 }) { MapHash = GameProgression.SupportedMapHash };
+                        transformed.AfterExecute = (fixture, _, call) =>
+                        {
+                            if (call == 1) { fixture.Add(source, -1); fixture.Add(target, 1); }
+                        };
+                        result = await Execute(transformed, "r003", adaptive: adaptive,
+                            protectedCounts: new Dictionary<string, int> { [canonical] = 1 });
+                        Check(Status(result) == "succeeded" && Completed(result) == 3 &&
+                            transformed.Calls.SequenceEqual(["r001", "r002", "r003"]) && transformed.Count(target) == 1,
+                            "verified combat forms retain one protected unit through fixed and adaptive unrelated sequences");
+                        passed++;
+                    }
+
+                    var disappeared = new Fixture(new() { ["b001"] = 4, [form] = 1 }) { MapHash = GameProgression.SupportedMapHash };
+                    disappeared.AfterExecute = (fixture, _, call) => { if (call == 1) fixture.Add(form, -1); };
+                    result = await Execute(disappeared, "r003", adaptive: adaptive,
+                        protectedCounts: new Dictionary<string, int> { [canonical] = 1 });
+                    Check(Status(result) == "failed" && disappeared.Calls.SequenceEqual(["r001"]) &&
+                        Message(result).Contains("보존할 유닛 수량"), "a protected combat family disappearing still stops before the next input");
+                    passed++;
+                }
+                var distinctForms = new Fixture(new() { ["b001"] = 4, [canonical] = 1, [form] = 1 }) { MapHash = GameProgression.SupportedMapHash };
+                distinctForms.AfterExecute = (fixture, _, call) =>
+                {
+                    if (call == 1) { fixture.Add(canonical, -1); fixture.Add(form, 1); }
+                };
+                result = await Execute(distinctForms, "r003", adaptive: true,
+                    protectedCounts: new Dictionary<string, int> { [canonical] = 1, [form] = 1 });
+                Check(Status(result) == "succeeded" && distinctForms.Count(form) == 2,
+                    "protecting two different forms reserves both real objects after a harmless transition");
+                passed++;
+
+                var lostOneForm = new Fixture(new() { ["b001"] = 4, [canonical] = 1, [form] = 1 }) { MapHash = GameProgression.SupportedMapHash };
+                lostOneForm.AfterExecute = (fixture, _, call) => { if (call == 1) fixture.Add(canonical, -1); };
+                result = await Execute(lostOneForm, "r003", adaptive: true,
+                    protectedCounts: new Dictionary<string, int> { [canonical] = 1, [form] = 1 });
+                Check(Status(result) == "failed" && lostOneForm.Calls.SequenceEqual(["r001"]) &&
+                    Message(result).Contains("보존할 유닛 수량"), "losing one of two protected real forms cannot be hidden by canonicalization");
+                passed++;
+            }
+            WriteCatalog(catalog, aliases);
+            var unverifiedMap = new Fixture(new() { ["b001"] = 4, ["H0B2"] = 1 });
+            unverifiedMap.AfterExecute = (fixture, _, call) =>
+            {
+                if (call == 1) { fixture.Add("H0B2", -1); fixture.Add("H0B3", 1); }
+            };
+            result = await Execute(unverifiedMap, "r003", protectedCounts: new Dictionary<string, int> { ["H0B2"] = 1 });
+            Check(Status(result) == "failed" && unverifiedMap.Calls.SequenceEqual(["r001"]),
+                "another map cannot authorize the supported map's combat material forms");
+            passed++;
             Console.WriteLine($"PASS: {passed} no-input craft-service sequence cases (ordering, direct craft, exact deck prefixes, partial failure, session, concurrent draws, repetition, split frames, cancellation, choice and fixture guard).");
         }
         finally
@@ -668,7 +740,7 @@ static class GameCraftSequenceTests
         }
     }
 
-    private static void WriteCatalog(string catalog, string aliases, IReadOnlyDictionary<string, (int Wood, int Gold)>? costs = null)
+    private static void WriteCatalog(string catalog, string aliases, IReadOnlyDictionary<string, (int Wood, int Gold)>? costs = null, string? mapHash = null)
     {
         object Recipe(string id, string target, params CraftIngredient[] ingredients)
         {
@@ -683,7 +755,7 @@ static class GameCraftSequenceTests
         }
         File.WriteAllText(catalog, JsonSerializer.Serialize(new
         {
-            map = new { sha256 = Hash },
+            map = new { sha256 = mapHash ?? Hash },
             units = CharacterCodes.Select(rawcode => new { rawcode, playable = true }).Concat(new[]
             {
                 new { rawcode = "e018", playable = false }, new { rawcode = "e0IX", playable = false }
@@ -697,10 +769,11 @@ static class GameCraftSequenceTests
                 Recipe("r008", "g006", new CraftIngredient("h003", 1), new CraftIngredient("h002", 1)),
                 Recipe("r009", "g007", new CraftIngredient("g003", 1), new CraftIngredient("h003", 2), new CraftIngredient("h002", 1)),
                 Recipe("r010", "g008", new CraftIngredient("h003", 13)),
-                Recipe("r011", "g009", new CraftIngredient("h003", 64))
+                Recipe("r011", "g009", new CraftIngredient("h003", 64)),
+                Recipe("r012", "g001", new CraftIngredient("m001", 1), new CraftIngredient("h07L", 1))
             }
         }));
-        File.WriteAllText(aliases, JsonSerializer.Serialize(new { mapSha256 = Hash, recipes = Array.Empty<object>() }));
+        File.WriteAllText(aliases, JsonSerializer.Serialize(new { mapSha256 = mapHash ?? Hash, recipes = Array.Empty<object>() }));
     }
 
     private static string Status(JsonElement result) => result.GetProperty("status").GetString()!;
@@ -720,6 +793,7 @@ static class GameCraftSequenceTests
         public bool LastChoiceConsumed { get; private set; }
         public bool SkipChoiceConsumption { get; init; }
         public string Identity { get; set; } = "00010000:00020000:00000000";
+        public string MapHash { get; init; } = Hash;
         public int ReadsAfterFirst { get; set; }
         public bool DelayResult { get; init; }
         public string SnapshotStatus { get; set; } = "snapshot_read";
@@ -742,7 +816,7 @@ static class GameCraftSequenceTests
             return JsonSerializer.Serialize(new
             {
                 status = SnapshotStatus, timestamp = DateTimeOffset.UtcNow, sequence = ++sequence,
-                processId = 123456789, gameVersion = "1.28.5.7680", loadedMap = "fixture-map.w3x", loadedMapHash = Hash,
+                processId = 123456789, gameVersion = "1.28.5.7680", loadedMap = "fixture-map.w3x", loadedMapHash = MapHash,
                 catalogMatchesLoadedArchive = true, localPlayer = 0, readErrors = 0, stableRoots = true, stableUnits = true,
                 sessionIdentity = Identity,
                 resources = ResourcesStatus is null ? null : new { status = ResourcesStatus, wood = Wood, gold = Gold, localPlayer = ResourcePlayer },
@@ -768,8 +842,13 @@ static class GameCraftSequenceTests
             foreach (var item in step.Ingredients)
             {
                 if (step.Type == "choice" && SkipChoiceConsumption) continue;
-                if (Count(item.Rawcode) < item.Count) throw new Exception("Simulated step double-spent an ingredient.");
-                Add(item.Rawcode, -item.Count);
+                var rawcode = MapHash == GameProgression.SupportedMapHash && item.Rawcode == "h07L" && Count("h07J") >= item.Count
+                    ? "h07J" : item.Rawcode;
+                if (rawcode != item.Rawcode && !baseline.GetProperty("counts").EnumerateArray()
+                    .Any(row => row.GetProperty("rawcode").GetString() == rawcode))
+                    throw new Exception("The native executor lost the raw carrot combat form.");
+                if (Count(rawcode) < item.Count) throw new Exception("Simulated step double-spent an ingredient.");
+                Add(rawcode, -item.Count);
             }
             LastChoiceConsumed = step.Type == "choice" && !SkipChoiceConsumption;
             if (DelayResult) { pendingResult = step; pendingReads = 0; }

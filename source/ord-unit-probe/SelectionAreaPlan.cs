@@ -3,8 +3,8 @@ internal readonly record struct SelectionArea((int X, int Y) From, (int X, int Y
 static class SelectionAreaPlan
 {
     private static readonly (int HalfWidth, int Above, int Below, string Tag)[] Candidates = [
-        (6, 6, 6, "square6"),
         (10, 10, 10, "square10"),
+        (6, 6, 6, "square6"),
         (16, 64, 20, "x16-up64-down20"),
         (16, 128, 20, "x16-up128-down20"),
         (16, 200, 24, "x16-up200-down24"),
@@ -17,6 +17,13 @@ static class SelectionAreaPlan
         (80, 200, 64, "moving-x80-up200-down64"),
         (112, 240, 96, "moving-x112-up240-down96")
     ];
+
+    internal static bool CanStartDrag(GameSelection.Geometry geometry, (int X, int Y) anchor)
+    {
+        var first = Candidates[0];
+        return geometry.IsSafeArea((anchor.X - first.HalfWidth, anchor.Y - first.Above),
+            (anchor.X + first.HalfWidth, anchor.Y + first.Below));
+    }
 
     public static SelectionArea[] Create(GameSelection.Geometry geometry, (int X, int Y) anchor, bool movingTarget = false)
     {
