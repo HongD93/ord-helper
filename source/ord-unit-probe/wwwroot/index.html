@@ -5,7 +5,7 @@
 *{box-sizing:border-box}body{margin:0;min-width:360px}button,input,select{font:inherit}button{cursor:pointer}button:disabled{cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid #8e7bea;outline-offset:1px}
 .toolbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:37px;padding:5px 9px;background:#fff;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:baseline;gap:9px;white-space:nowrap}h1{margin:0;font-size:13px;font-weight:600;color:#5145ac}#map-caption{color:#858191;font-size:10px}.tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:7px}.search{width:126px;background:#fff;color:#454954;border:1px solid #d9d5e8;border-radius:3px;padding:4px 6px}.search::placeholder{color:#96909f}.tool-button,.sort{min-height:25px;padding:4px 7px;background:#fff;border:1px solid #d9d5e8;border-radius:3px;color:#5f577b}.tool-button:hover{background:#f4f1fc}.live-state{display:flex;align-items:center;gap:4px;color:#999;font-size:10px;white-space:nowrap}.state-dot{width:5px;height:5px;border-radius:50%;background:currentColor}.live-state[data-tone=live]{color:#38885b}.live-state[data-tone=checking]{color:#a67f22}.live-state[data-tone=error]{color:#bd5360}#owned-total{color:#6c638c;font-size:10px;white-space:nowrap}
 .filters{margin:0 3px 5px;border:1px solid #e4e0f1;border-radius:4px;overflow:hidden}.filters summary{list-style:none;cursor:pointer;padding:4px 8px;text-align:center;background:var(--purple);color:#fff;min-height:23px;user-select:none}.filters summary::-webkit-details-marker{display:none}.filters summary::after{content:"⌄";margin-left:7px}.filters:not([open]) summary::after{content:"›"}
-.story-ranking-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;padding:8px}.story-ranking-groups h3{margin:0 0 4px;font-size:12px;color:#65549a}.story-ranking-groups ol{margin:0;padding-left:2.4em;max-height:18rem;overflow:auto;font-size:12px;line-height:1.6}.filter-content{padding:8px 10px;background:#faf9fe}.filter-main{display:flex;align-items:center;flex-wrap:wrap;gap:8px 23px;padding-bottom:7px;margin-bottom:6px;border-bottom:1px solid var(--line)}.filter-main label,.tier-filters label{display:inline-flex;align-items:center;gap:4px;min-height:18px;cursor:pointer;font-size:10px;color:#665e77}.filter-main input,.tier-filters input{width:11px;height:11px;margin:0;accent-color:var(--purple)}#filter-clear{margin-left:auto;padding:0;border:0;background:none;color:#857b9c;font-size:10px;text-decoration:underline}.tier-filters{display:grid;grid-template-columns:repeat(8,minmax(100px,1fr));gap:3px 8px}#last-updated,#craft-availability{font-size:10px;color:#91899d}.state-banner{padding:6px 10px;background:#f4f1fb;color:#796c97;text-align:center;border-bottom:1px solid var(--line)}.state-banner[data-tone=error]{background:#fff3f3;color:#af5360}.craft-feedback{padding:6px 10px;background:#f6f3ff;color:#75648e;border-bottom:1px solid var(--line)}.craft-feedback[data-tone=error]{background:#fff2f3;color:#a34757}.craft-feedback[data-tone=success]{background:#edfaf1;color:#32744b}
+.story-ranking-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;padding:8px}.story-ranking-groups h3{margin:0 0 4px;font-size:12px;color:#65549a}.story-ranking-groups ol{margin:0;padding-left:2.4em;max-height:18rem;overflow:auto;font-size:12px;line-height:1.6}.ranking-tabs{display:flex;gap:6px;padding:8px 8px 0}.ranking-tabs button{flex:1;padding:5px 8px;border:1px solid #d9d2f0;border-radius:4px;background:#f6f3fd;color:#65549a;font-size:12px;cursor:pointer}.ranking-tabs button[aria-pressed="true"]{background:var(--purple);border-color:var(--purple);color:#fff}.filter-content{padding:8px 10px;background:#faf9fe}.filter-main{display:flex;align-items:center;flex-wrap:wrap;gap:8px 23px;padding-bottom:7px;margin-bottom:6px;border-bottom:1px solid var(--line)}.filter-main label,.tier-filters label{display:inline-flex;align-items:center;gap:4px;min-height:18px;cursor:pointer;font-size:10px;color:#665e77}.filter-main input,.tier-filters input{width:11px;height:11px;margin:0;accent-color:var(--purple)}#filter-clear{margin-left:auto;padding:0;border:0;background:none;color:#857b9c;font-size:10px;text-decoration:underline}.tier-filters{display:grid;grid-template-columns:repeat(8,minmax(100px,1fr));gap:3px 8px}#last-updated,#craft-availability{font-size:10px;color:#91899d}.state-banner{padding:6px 10px;background:#f4f1fb;color:#796c97;text-align:center;border-bottom:1px solid var(--line)}.state-banner[data-tone=error]{background:#fff3f3;color:#af5360}.craft-feedback{padding:6px 10px;background:#f6f3ff;color:#75648e;border-bottom:1px solid var(--line)}.craft-feedback[data-tone=error]{background:#fff2f3;color:#a34757}.craft-feedback[data-tone=success]{background:#edfaf1;color:#32744b}
 .board-scroll{overflow-x:auto;padding:0 4px 18px}.board{display:grid;grid-template-columns:repeat(8,minmax(145px,1fr));gap:6px;min-width:1210px;align-items:start}.column{min-width:0}.tier{margin-bottom:5px}.tier-heading{display:flex;align-items:center;gap:4px;width:100%;height:21px;padding:3px 6px;border:0;border-radius:5px 5px 2px 2px;background:var(--purple);color:#fff;text-align:left;font-size:10px}.tier-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}.tier-sum{min-width:13px;text-align:center;color:#e6e0ff;font-size:9px}.tier-arrow{font-size:9px;margin-left:2px}.tier.collapsed .tier-body{display:none}.tier.collapsed .tier-arrow{transform:rotate(-90deg)}.tier-body{margin-top:3px}.unit-row{display:grid;grid-template-columns:17px minmax(0,1fr) 14px 16px;gap:1px;align-items:center;height:21px;margin-bottom:1px;padding:0 1px 0 0;background:var(--row);border-bottom:1px solid #e4e0ef}.unit-row.unknown{opacity:.65}.unit-icon{position:relative;display:grid;place-items:center;flex-shrink:0;width:16px;height:16px;overflow:hidden;background:#eee;border:1px solid #b5b4b9}.unit-icon img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.unit-initial{color:#9a92aa;font-size:9px}.unit-name{position:relative;display:flex;align-items:center;min-width:0;width:100%;height:20px;padding:0 2px;border:0;background:transparent;text-align:left;color:#323b3a;overflow:hidden}.unit-name:hover .unit-label{text-decoration:underline;text-underline-offset:2px}.unit-progress{position:absolute;inset:0;background:#e8e6f2;pointer-events:none}.unit-progress-fill,.unit-choice-fill{position:absolute;top:0;bottom:0;transition:width .15s,left .15s}.unit-progress-fill{left:0;background:var(--green)}.unit-choice-fill{background:#ffec97}.unit-choice-fill[data-tone=choice-ready]{background:#f5abb4}.unit-percent,.unit-label{position:relative;z-index:1;line-height:20px;white-space:nowrap;font-size:9px}.unit-percent{flex-shrink:0;margin-right:2px;font-variant-numeric:tabular-nums}.unit-label{overflow:hidden;text-overflow:ellipsis}.unit-row.owned .quantity{color:#6550a7;border-color:#baafe0}.recipe-button{display:grid;place-items:center;width:14px;height:18px;padding:0;border:0;background:#a1cbb1;color:#fff;font-size:12px;line-height:16px}.recipe-button.ready{background:#68b186}.recipe-button:disabled{color:#d7d3df;background:#f1eef8}.quantity{display:grid;place-items:center;width:16px;height:18px;border:1px solid #d9d4e7;background:#fff;color:#655e80;text-align:center;font-size:9px;font-variant-numeric:tabular-nums;overflow:hidden}.board.checking .unit-row{opacity:.72}.empty-board{padding:60px 20px;text-align:center;color:#8c829f}.flash-up .quantity{animation:flash-up 1.1s ease-out}.flash-down .quantity{animation:flash-down 1.1s ease-out}@keyframes flash-up{0%,20%{background:#a8e6bd}100%{background:#fff}}@keyframes flash-down{0%,20%{background:#f5bec5}100%{background:#fff}}
 .unit-evolution-fill{position:absolute;top:0;bottom:0;background:#8bb9ef;transition:width .15s,left .15s}
 dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;border-radius:3px;overflow:hidden;background:#fff;color:#494d58;box-shadow:0 12px 70px #0004}dialog::backdrop{background:#27243580}.detail-topbar{display:flex;align-items:center;justify-content:space-between;height:29px;padding:4px 10px}.detail-nav,.close-detail{display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;background:none;color:#616575;font-size:20px}.detail-nav:disabled{color:#bdc0c8}.detail-header{display:flex;align-items:center;gap:10px;margin:0 10px;padding:8px 0 15px;border-bottom:1px solid var(--line)}.detail-header .unit-icon{width:30px;height:30px}.detail-title{min-width:0;flex:1}#detail-name{margin:0;font-size:13px;font-weight:600;line-height:1.65;overflow-wrap:anywhere}#detail-tier{display:none}.detail-abilities{max-width:180px;padding:8px 10px;border-radius:10px;background:#f8f9fc;color:#646b78;font-size:9px;line-height:1.5;white-space:pre-line}.detail-content{max-height:calc(92vh - 110px);overflow-y:auto;padding:0 10px 12px}.detail-top{display:flex;justify-content:space-between;gap:12px;margin:9px 0;font-size:10px;color:#9591a0}.detail-choice{margin:0 0 9px;color:#8b6671;font-size:10px}#recipe-options{width:100%;padding:5px 7px;margin:0 0 8px;border:1px solid #ddd8eb;background:#fff;color:#615571}.recipe-section{padding:15px 0 12px;border-bottom:1px solid var(--line)}.recipe-section-title{margin:0 0 12px;font-size:13px;font-weight:600;color:#484d58}.material-icons{display:grid;grid-template-columns:repeat(auto-fill,minmax(65px,1fr));gap:13px 12px;align-items:start}.material-card{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0;padding:0 2px;border:0;background:transparent;color:#747984;text-align:center;cursor:pointer}.material-card .unit-icon{width:30px;height:30px}.material-card:hover .material-caption{color:#6750b5;text-decoration:underline;text-underline-offset:2px}.material-caption{width:100%;font-size:8px;line-height:1.5;overflow-wrap:anywhere}.material-percent{font-size:10px;color:#8d929e;font-variant-numeric:tabular-nums}.section-empty{margin:0;color:#a5a5ad;font-size:10px}.extra-condition{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:6px 0;color:#8b8595;font-size:10px}.recipe-note{margin:9px 0;font-size:10px;line-height:1.6;color:#9d8b8f}.craft-action{display:block;min-width:150px;margin:15px 0 2px auto;padding:8px 12px;border:0;border-radius:3px;background:var(--purple);color:#fff}.craft-action:disabled{background:#e7e2f2;color:#a59bb8}
@@ -14,7 +14,7 @@ dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;bo
 .material-option{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;padding:0;border:0;background:transparent;color:inherit;cursor:pointer}.material-alternatives{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:5px}.material-alternatives>.material-caption,.material-alternatives>.material-percent{grid-column:span 2}.material-item{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0}.material-item .material-card{width:100%}.material-craft{padding:3px 9px;border:0;border-radius:3px;background:var(--purple);color:#fff;font-size:9px;cursor:pointer}.material-craft:disabled{background:#e7e2f2;color:#a59bb8;cursor:default}</style></head>
 <body><header class="toolbar"><div class="brand"><h1>원랜디 조합도우미</h1><span id="map-caption">유닛 정보 불러오는 중</span></div><div class="tools"><div class="live-state" id="live-state" data-tone="waiting" role="status"><span class="state-dot" aria-hidden="true"></span><span id="status-text">게임에 연결 중</span></div><span id="owned-total"></span><input id="search" class="search" type="search" placeholder="유닛 검색" aria-label="유닛 검색" autocomplete="off"><select id="sort" class="sort" aria-label="유닛 정렬"><option value="default">기본순</option><option value="owned">보유순</option><option value="name">이름순</option><option value="ready">재료 충족순</option></select><button id="fullscreen" class="tool-button" type="button">전체화면</button></div></header>
 <section id="nightmare-advisor-host"></section>
-<details id="story-rankings" class="filters" hidden><summary>스토리 순위</summary><div id="story-ranking-groups" class="story-ranking-groups"></div></details>
+<details id="rankings" class="filters" hidden><summary>순위</summary><div class="ranking-tabs"><button type="button" id="story-ranking-button" aria-pressed="false">스토리 순위</button><button type="button" id="line-ranking-button" aria-pressed="false">라인딜 순위</button></div><div id="story-ranking-groups" class="story-ranking-groups" hidden></div><div id="line-ranking-groups" class="story-ranking-groups" hidden></div></details>
 <details class="filters"><summary>유닛 필터</summary><div class="filter-content"><div class="filter-main"><label><input id="owned-only" type="checkbox">보유 유닛만</label><label><input id="materials-only" type="checkbox">유닛 재료 충족</label><span id="last-updated"></span><span id="craft-availability">게임 조합 준비 중</span><button id="filter-clear" type="button">필터 초기화</button></div><div class="tier-filters" id="tier-filters"></div></div></details>
 <div class="state-banner" id="state-banner" data-tone="waiting">게임에 연결 중</div><div class="craft-feedback" id="craft-feedback" role="status" hidden></div><main class="board-scroll"><div class="board" id="board"></div><div id="catalog-state" class="empty-board">유닛 정보를 불러오는 중</div></main>
 <dialog id="unit-detail" aria-labelledby="detail-name"><div class="detail-topbar"><button id="detail-back" class="detail-nav" type="button" aria-label="이전 유닛">←</button><button class="close-detail" id="close-detail" type="button" aria-label="닫기">×</button></div><div class="detail-header"><div id="detail-icon"></div><div class="detail-title"><h2 id="detail-name"></h2><div id="detail-tier"></div></div><div class="detail-summary"><span id="detail-story" class="detail-story" hidden><span id="detail-story-rank" class="story-rank"></span></span><div class="detail-abilities" id="detail-abilities" hidden></div></div></div><div class="detail-content"><div class="detail-top"><span id="detail-mode"></span><span id="detail-quantity"></span></div><div id="detail-choice" class="detail-choice" hidden></div><select id="recipe-options" aria-label="조합법" hidden></select><div id="recipe-detail"></div></div></dialog><div id="toast" role="status" hidden></div>
@@ -47,7 +47,7 @@ const unstableStatuses=new Set(["units_changed","world_changed","partial_read"])
 const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),rows=new Map(),sections=new Map();
 const hiddenTiers=new Set(),collapsedTiers=new Set(),flashTimers=new Map();
 let catalog=null,catalogError=false,liveCounts=null,mode="live",displayGroups=[],nativeUnitDescriptions=null,recipeGraph=null;
-let storySpeedRanks=null,resourceSkillData=null;
+let storySpeedRanks=null,lineClearRanks=null,resourceSkillData=null;
 let startingEvolutionForecast=null;
 let liveState={message:"게임에 연결 중",tone:"waiting",checking:false},receivedRevision=0,latestSnapshot=null;
 let detailUnit=null,selectedRecipe=null,selectedMaterialChoiceRawcode=null,toastTimer=null,crafting=null,liveReceivedAt=0;
@@ -124,20 +124,30 @@ function renderStoryRank(unit){
   const speed=typeof storySpeedRanks!=="undefined"&&typeof window!=="undefined"?window.OrdUnitStoryFlags?.label?.(unit.rawcode,storySpeedRanks)||"":"";
   host.hidden=!speed;label.textContent=speed;
 }
-// 스토리 순위 목록: 묶음마다 순위순으로 유닛 이름과 등급을 보인다.
-function renderStoryRankingList(data){
-  const host=byId("story-ranking-groups"),groups=window.OrdUnitStoryFlags?.listing?.(data,storySpeedRanks)||[];
-  host.replaceChildren();
-  for(const group of groups){
-    const section=makeElement("section",""),list=makeElement("ol","");
-    section.append(makeElement("h3","",group.label));
-    for(const row of group.rows){
-      const unit=unitByCode.get(row.rawcode),name=cleanName(unit?.displayName||row.rawcode)+(row.variant?" ("+row.variant+")":""),tier=tierSettings.get(unit?.tier)?.label;
-      const item=makeElement("li","",tier?name+" · "+tier:name);item.value=row.rank;list.append(item);
+// 순위 목록: 순위 버튼 안의 스토리·라인딜 버튼을 누르면 해당 순위가 묶음마다 순위순으로 나온다.
+function renderRankingList(sources){
+  let any=false;
+  for(const [kind,data,entries] of sources){
+    const host=byId(kind+"-ranking-groups"),button=byId(kind+"-ranking-button"),groups=window.OrdUnitStoryFlags?.listing?.(data,entries)||[];
+    host.replaceChildren();host.hidden=true;
+    for(const group of groups){
+      const section=makeElement("section",""),list=makeElement("ol","");
+      section.append(makeElement("h3","",group.label));
+      for(const row of group.rows){
+        const unit=unitByCode.get(row.rawcode),name=cleanName(unit?.displayName||row.rawcode)+(row.variant?" ("+row.variant+")":""),tier=tierSettings.get(unit?.tier)?.label;
+        const item=makeElement("li","",tier?name+" · "+tier:name);item.value=row.rank;list.append(item);
+      }
+      section.append(list);host.append(section);
     }
-    section.append(list);host.append(section);
+    button.hidden=!groups.length;button.setAttribute("aria-pressed","false");any=any||groups.length>0;
   }
-  byId("story-rankings").hidden=!groups.length;
+  byId("rankings").hidden=!any;
+}
+function toggleRankingList(kind){
+  for(const name of ["story","line"]){
+    const list=byId(name+"-ranking-groups"),show=name===kind&&list.hidden&&list.children.length>0;
+    list.hidden=!show;byId(name+"-ranking-button").setAttribute("aria-pressed",String(show));
+  }
 }
 function nameOf(code) {
   return unitByCode.get(code)?.displayName || (code === "e0IX" ? "랜덤 위습" : "이름 없는 유닛");
@@ -844,19 +854,21 @@ async function fetchNativeUnitDescriptions(){
 async function loadCatalog(){
   try{
     const optional=url=>fetch(url,{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null);
-    const [response,metadata,descriptions,displayIdentities,combatIdentities,resourceSkills,storySpeed]=await Promise.all([
+    const [response,metadata,descriptions,displayIdentities,combatIdentities,resourceSkills,storySpeed,lineClear]=await Promise.all([
       fetch("/data/map-catalog.json",{cache:"no-store"}),
       fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       fetchNativeUnitDescriptions(),
       fetch("/board-display-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       fetch("/data/combat-inventory-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       optional("/data/unit-resource-skills-2.331.json"),
-      optional("/data/nightmare-story-speed-2.331.json")
+      optional("/data/nightmare-story-speed-2.331.json"),
+      optional("/data/nightmare-line-clear-2.331.json")
     ]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
     catalog=data;nativeUnitDescriptions=descriptions;resourceSkillData=resourceSkills;
     storySpeedRanks=window.OrdUnitStoryFlags?.normalize?.(storySpeed,data)||null;
+    lineClearRanks=window.OrdUnitStoryFlags?.normalize?.(lineClear,data)||null;
     const combatInventory=globalThis.OrdNightmareIntegration?.configureCombatInventory?.(data,combatIdentities);
     const legacyHiddenUnits=new Set(["h076","h04T","h04Y","h05D","h0CA","h06O"]);
     const groupMetadata=metadata?.units&&Array.isArray(metadata.groups)?metadata:null;
@@ -887,7 +899,7 @@ async function loadCatalog(){
     }
     for(const recipe of data.recipes){if(!recipesByUnit.has(recipe.resultUnitRawcode))recipesByUnit.set(recipe.resultUnitRawcode,[]);recipesByUnit.get(recipe.resultUnitRawcode).push(recipe);}
     byId("map-caption").textContent=cleanName(data.map?.title)||"원피스 랜덤 디펜스";byId("catalog-state").hidden=true;buildBoard();
-    if(storySpeedRanks)renderStoryRankingList(storySpeed);
+    if(storySpeedRanks||lineClearRanks)renderRankingList([["story",storySpeed,storySpeedRanks],["line",lineClear,lineClearRanks]]);
     if(latestSnapshot)applySnapshot(latestSnapshot);else renderBoard();
   }catch{catalogError=true;byId("catalog-state").textContent="유닛 정보를 불러오지 못했어요.";byId("map-caption").textContent="";updateStatus();}
 }
@@ -899,6 +911,7 @@ function toast(message) {
   toastTimer = setTimeout(() => { byId("toast").hidden = true; },2500);
 }
 
+byId("story-ranking-button").addEventListener("click",()=>toggleRankingList("story"));byId("line-ranking-button").addEventListener("click",()=>toggleRankingList("line"));
 byId("search").addEventListener("input",renderBoard);byId("sort").addEventListener("change",renderBoard);byId("owned-only").addEventListener("change",renderBoard);byId("materials-only").addEventListener("change",renderBoard);
 byId("filter-clear").addEventListener("click",()=>{byId("search").value="";byId("owned-only").checked=false;byId("materials-only").checked=false;hiddenTiers.clear();byId("tier-filters").querySelectorAll("input").forEach(input=>input.checked=true);renderBoard();});
 byId("recipe-options").addEventListener("change",()=>{const [recipeId,materialChoiceRawcode]=byId("recipe-options").value.split(":");selectedRecipe=recipeId;selectedMaterialChoiceRawcode=materialChoiceRawcode||null;renderDetail();});
