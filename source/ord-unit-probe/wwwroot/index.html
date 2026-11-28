@@ -18,7 +18,7 @@ dialog{width:min(680px,calc(100vw - 24px));max-height:92vh;padding:0;border:0;bo
 <details class="filters"><summary>유닛 필터</summary><div class="filter-content"><div class="filter-main"><label><input id="owned-only" type="checkbox">보유 유닛만</label><label><input id="materials-only" type="checkbox">유닛 재료 충족</label><span id="last-updated"></span><span id="craft-availability">게임 조합 준비 중</span><button id="filter-clear" type="button">필터 초기화</button></div><div class="tier-filters" id="tier-filters"></div></div></details>
 <div class="state-banner" id="state-banner" data-tone="waiting">게임에 연결 중</div><div class="craft-feedback" id="craft-feedback" role="status" hidden></div><main class="board-scroll"><div class="board" id="board"></div><div id="catalog-state" class="empty-board">유닛 정보를 불러오는 중</div></main>
 <dialog id="unit-detail" aria-labelledby="detail-name"><div class="detail-topbar"><button id="detail-back" class="detail-nav" type="button" aria-label="이전 유닛">←</button><button class="close-detail" id="close-detail" type="button" aria-label="닫기">×</button></div><div class="detail-header"><div id="detail-icon"></div><div class="detail-title"><h2 id="detail-name"></h2><div id="detail-tier"></div></div><div class="detail-summary"><span id="detail-story" class="detail-story" hidden><span id="detail-story-rank" class="story-rank"></span></span><div class="detail-abilities" id="detail-abilities" hidden></div></div></div><div class="detail-content"><div class="detail-top"><span id="detail-mode"></span><span id="detail-quantity"></span></div><div id="detail-choice" class="detail-choice" hidden></div><select id="recipe-options" aria-label="조합법" hidden></select><div id="recipe-detail"></div></div></dialog><div id="toast" role="status" hidden></div>
-<script src="/unit-resource-skills.js"></script><script src="/unit-story-flags.js"></script><script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
+<script src="/unit-resource-skills.js"></script><script src="/unit-story-flags.js"></script><script src="/unit-role-tags.js"></script><script src="/recipe-graph.js"></script><script src="/starting-evolution-forecast.js"></script><script src="/nightmare-reward-budget.js"></script><script src="/nightmare-random-forecast.js"></script><script src="/nightmare-strategy-panel.js"></script><script src="/nightmare-advisor-integration.js"></script><script>
 "use strict";
 const byId=id=>document.getElementById(id);
 const numberFormat=new Intl.NumberFormat("ko-KR");
@@ -47,7 +47,7 @@ const unstableStatuses=new Set(["units_changed","world_changed","partial_read"])
 const unitByCode=new Map(),unitsByTier=new Map(),recipesByUnit=new Map(),rows=new Map(),sections=new Map();
 const hiddenTiers=new Set(),collapsedTiers=new Set(),flashTimers=new Map();
 let catalog=null,catalogError=false,liveCounts=null,mode="live",displayGroups=[],nativeUnitDescriptions=null,recipeGraph=null;
-let storySpeedRanks=null,lineClearRanks=null,resourceSkillData=null;
+let storySpeedRanks=null,lineClearRanks=null,resourceSkillData=null,roleTagData=null;
 let startingEvolutionForecast=null;
 let liveState={message:"게임에 연결 중",tone:"waiting",checking:false},receivedRevision=0,latestSnapshot=null;
 let detailUnit=null,selectedRecipe=null,selectedMaterialChoiceRawcode=null,toastTimer=null,crafting=null,liveReceivedAt=0;
@@ -232,12 +232,14 @@ function recipeConditionReason(requirements){
   return null;
 }
 // 이름 뒤에 자원 스킬 하트와 스토리 순위 깃발을 붙인다. 하트는 맵 버전이 맞는 자원 자료(2.331 전용 파일 우선)만 쓴다.
+// 맨 끝에는 역할 자료의 효과 표기(스턴 환산·이감·깎·공속·공증 등)를 괄호로 붙인다.
 function decorateUnitName(name,rawcode){
   const view=typeof window!=="undefined"?window:null,hash=typeof catalog!=="undefined"?catalog?.map?.sha256:null;
   const native=typeof nativeUnitDescriptions!=="undefined"?nativeUnitDescriptions:null,dedicated=typeof resourceSkillData!=="undefined"?resourceSkillData:null;
   const resource=hash&&dedicated?.catalogMapHash===hash&&dedicated.resourceSkills?.catalogMapHash===hash?dedicated:native;
   const marked=view?.OrdUnitResourceSkills?.decorate?view.OrdUnitResourceSkills.decorate(name,rawcode,resource,hash):name;
-  return view?.OrdUnitStoryFlags?.decorate&&typeof storySpeedRanks!=="undefined"?view.OrdUnitStoryFlags.decorate(marked,rawcode,storySpeedRanks):marked;
+  const flagged=view?.OrdUnitStoryFlags?.decorate&&typeof storySpeedRanks!=="undefined"?view.OrdUnitStoryFlags.decorate(marked,rawcode,storySpeedRanks):marked;
+  return view?.OrdUnitRoleTags?.decorate&&typeof roleTagData!=="undefined"?view.OrdUnitRoleTags.decorate(flagged,rawcode,roleTagData,hash):flagged;
 }
 function compactName(unit){
   if(!unit)return "이름 없는 유닛";
@@ -854,7 +856,7 @@ async function fetchNativeUnitDescriptions(){
 async function loadCatalog(){
   try{
     const optional=url=>fetch(url,{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null);
-    const [response,metadata,descriptions,displayIdentities,combatIdentities,resourceSkills,storySpeed,lineClear]=await Promise.all([
+    const [response,metadata,descriptions,displayIdentities,combatIdentities,resourceSkills,storySpeed,lineClear,roleProfile]=await Promise.all([
       fetch("/data/map-catalog.json",{cache:"no-store"}),
       fetch("/data/combat-metadata.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       fetchNativeUnitDescriptions(),
@@ -862,11 +864,12 @@ async function loadCatalog(){
       fetch("/data/combat-inventory-identities.json",{cache:"no-store"}).then(result=>result.ok?result.json():null).catch(()=>null),
       optional("/data/unit-resource-skills-2.331.json"),
       optional("/data/nightmare-story-speed-2.331.json"),
-      optional("/data/nightmare-line-clear-2.331.json")
+      optional("/data/nightmare-line-clear-2.331.json"),
+      optional("/data/nightmare-role-profile-2.331.json")
     ]);
     if(!response.ok)throw new Error("catalog unavailable");const data=await response.json();
     if(!Array.isArray(data.units)||!Array.isArray(data.tiers)||!Array.isArray(data.recipes))throw new Error("invalid catalog");
-    catalog=data;nativeUnitDescriptions=descriptions;resourceSkillData=resourceSkills;
+    catalog=data;nativeUnitDescriptions=descriptions;resourceSkillData=resourceSkills;roleTagData=roleProfile;
     storySpeedRanks=window.OrdUnitStoryFlags?.normalize?.(storySpeed,data)||null;
     lineClearRanks=window.OrdUnitStoryFlags?.normalize?.(lineClear,data)||null;
     const combatInventory=globalThis.OrdNightmareIntegration?.configureCombatInventory?.(data,combatIdentities);
@@ -896,6 +899,25 @@ async function loadCatalog(){
       const damageGroup=damageGroups.get(boardDisplay?.groupName);
       if(unit.visible&&source.playable===true&&damageGroup?.unitRawcodes?.includes(source.rawcode))data.damageDirectionHints[source.rawcode]=damageGroup.primaryRole;
       if(unit.visible){if(!unitsByTier.has(unit.tier))unitsByTier.set(unit.tier,[]);unitsByTier.get(unit.tier).push(unit);}
+    }
+    // 2.331 역할 자료가 맞으면 보드 묶음과 물딜·마딜 구분을 그 자료로 만든다(예전 표시 자료의 묶음은 쓰지 않고, 짧은 이름만 남긴다).
+    const roleBoard=roleProfile?.schemaVersion===1&&roleProfile.catalogMapHash===data.map?.sha256&&roleProfile.units?roleProfile:null;
+    if(roleBoard){
+      const roleKinds={"물딜":"physical","마딜":"magic","스턴":"stun","보조":null},roleOrder=["물딜","스턴","마딜","보조"],tierOrder=new Map(canonicalTiers.map((tier,index)=>[tier.id,index])),groups=new Map();
+      data.damageDirectionHints={};
+      for(const unit of unitByCode.values()){
+        const info=Object.prototype.hasOwnProperty.call(roleBoard.units,unit.rawcode)?roleBoard.units[unit.rawcode]:null;
+        if(unit.boardDisplay)unit.boardDisplay={...unit.boardDisplay,groupName:null};
+        // 스킨(맵의 스킨 적용 유닛)은 보드에서 뺀다. 보유하면 추천 계산에는 그대로 센다.
+        if(info?.skinOf){unit.visible=false;const list=unitsByTier.get(unit.tier);if(list)unitsByTier.set(unit.tier,list.filter(other=>other!==unit));continue;}
+        if(info&&(info.direction==="physical"||info.direction==="magic")&&unit.visible&&unit.playable===true)data.damageDirectionHints[unit.rawcode]=info.direction;
+        if(!unit.visible||!Object.prototype.hasOwnProperty.call(roleKinds,info?.board))continue;
+        const name=(tierSettings.get(unit.tier)?.label||unit.tier)+" ["+info.board+"]";
+        unit.boardDisplay={...(unit.boardDisplay||{}),groupName:name};
+        if(!groups.has(name))groups.set(name,{name,primaryRole:roleKinds[info.board],tier:unit.tier,board:info.board,unitRawcodes:[]});
+        groups.get(name).unitRawcodes.push(unit.rawcode);
+      }
+      displayGroups=Array.from(groups.values()).sort((a,b)=>(tierOrder.get(a.tier)??99)-(tierOrder.get(b.tier)??99)||roleOrder.indexOf(a.board)-roleOrder.indexOf(b.board));
     }
     for(const recipe of data.recipes){if(!recipesByUnit.has(recipe.resultUnitRawcode))recipesByUnit.set(recipe.resultUnitRawcode,[]);recipesByUnit.get(recipe.resultUnitRawcode).push(recipe);}
     byId("map-caption").textContent=cleanName(data.map?.title)||"원피스 랜덤 디펜스";byId("catalog-state").hidden=true;buildBoard();

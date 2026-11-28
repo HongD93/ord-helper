@@ -1,5 +1,5 @@
 "use strict";
-importScripts("/recipe-graph.js", "/nightmare-balance.js", "/nightmare-records.js", "/nightmare-reward-budget.js", "/nightmare-random-forecast.js", "/nightmare-combat-verifier.js", "/nightmare-support-adaptation.js", "/nightmare-early-story.js", "/nightmare-hand-fit.js", "/nightmare-reinforcements.js", "/nightmare-brulee.js", "/nightmare-utility-targets.js", "/nightmare-line-damage.js", "/nightmare-strategy.js");
+importScripts("/recipe-graph.js", "/nightmare-balance.js", "/nightmare-records.js", "/nightmare-reward-budget.js", "/nightmare-random-forecast.js", "/nightmare-combat-verifier.js", "/nightmare-support-adaptation.js", "/nightmare-early-story.js", "/nightmare-hand-fit.js", "/nightmare-reinforcements.js", "/nightmare-brulee.js", "/nightmare-utility-targets.js", "/nightmare-line-damage.js", "/nightmare-role-advisor.js", "/nightmare-strategy.js");
 let advisor = null,advisorMapHash=null,recordsRevision=null;
 self.onmessage = function (event) {
   const message = event.data || {};
@@ -8,7 +8,7 @@ self.onmessage = function (event) {
       const compositionOnly=self.OrdNightmareRecords?.historicalProjection(message.clearRecords,message.catalog)&&message.combat?.map?.sha256!==message.catalog?.map?.sha256;
       advisor = self.OrdNightmareStrategy.create(message.catalog, message.combat, message.rules, message.clearRecords, {
         randomDrops:message.randomDrops,combatValidation:message.combatValidation,storyRankings:message.storyRankings,
-        bruleeCopy:message.bruleeCopy,utilityCombat:message.utilityCombat,utilityTargetsProfile:message.utilityTargetsProfile,lineDamageProfile:message.lineDamageProfile,
+        bruleeCopy:message.bruleeCopy,utilityCombat:message.utilityCombat,utilityTargetsProfile:message.utilityTargetsProfile,lineDamageProfile:message.lineDamageProfile,roleProfile:message.roleProfile,roleRecommendations:Boolean(message.roleProfile),
         earlyStoryRecommendations:true,handFitRecommendations:true,reinforcementRecommendations:!compositionOnly,recordOnly:true,supportAdaptation:!compositionOnly,minRecordVersion:"2.321"
       });
       advisorMapHash=message.catalog?.map?.sha256||null;
