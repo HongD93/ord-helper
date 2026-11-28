@@ -277,12 +277,13 @@ function create(options){
    if(state.error&&options.onRetry){const retry=el("button","ord-na-name","다시 계산");retry.type="button";retry.addEventListener("click",()=>options.onRetry());panel.append(retry);}
    renderReinforcements(result);return;
   }
-  // 역할 추천: 덱의 역할 지표를 같은 방향 클리어 기록 중앙값과 나란히 보이고, 모자란 항목을 구분한다.
+  // 역할 추천(단계별): 지금 보유 유닛의 역할 지표를 같은 방향 클리어 기록 중앙값과 나란히 보이고, 모자란 항목을 구분한다.
   const role=deck.sourceEvidence?.kind==="role_recommendation"?deck.sourceEvidence:null;
   const roleNames={main:"주딜",line:"라인",boss:"보스",enraged:"광폭화",slow:"이감",stun:"스턴",armor:"방깎",bossKiller:"보잡"};
-  const roleOf=new Map(role?[[role.main,["main"]],...list(role.picks).map(pick=>[pick.rawcode,list(pick.roles)])]:[]);
+  const roleMains=new Set(role?list(role.mains).length?list(role.mains):[role.main]:[]);
+  const roleOf=new Map(role?[...Array.from(roleMains,code=>[code,["main"]]),...list(role.picks).map(pick=>[pick.rawcode,list(pick.roles)])]:[]);
   if(role){
-   const metrics=role.after?.metrics||{},threshold=role.threshold||{},gaps=role.after?.gaps||{},line=el("div","ord-na-role");
+   const current=role.current||role.after||{},metrics=current.metrics||{},threshold=role.threshold||{},gaps=current.gaps||{},line=el("div","ord-na-role");
    const chip=(key,value)=>{if(value)line.append(el("span","ord-na-chip"+(gaps[key]>0?" ord-na-short":""),value));};
    const seconds=key=>finite(metrics[key])&&finite(threshold[key]?.median)?roleNames[key]+" "+metrics[key].toFixed(1)+"/"+threshold[key].median.toFixed(1)+"초":null;
    chip("line",seconds("line"));chip("boss",seconds("boss"));chip("enraged",seconds("enraged"));
@@ -293,7 +294,7 @@ function create(options){
    if(line.childNodes?.length!==0)panel.append(line);
   }
   const brulee=bruleeAction(result),order=list(result.order).map(item=>typeof item==="string"?item:item.rawcode),positions=new Map(order.map((item,index)=>[item,index+1]));
-  const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[role&&goal.rawcode===role.main?0:1,topTiers.has(goal.tier)?0:1,finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
+  const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[role&&roleMains.has(goal.rawcode)?0:1,topTiers.has(goal.tier)?0:1,finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
   const goals=list(deck.goals).slice().sort((a,b)=>{const x=goalOrder(a),y=goalOrder(b);for(let i=0;i<x.length;i++)if(x[i]!==y[i])return x[i]-y[i];return 0;});
   const grid=el("div","ord-na-roster");
   for(const [displayIndex,goal] of goals.entries()){
