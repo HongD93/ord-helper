@@ -108,7 +108,8 @@
     }
     function compare(a,b){if(a?.verified!==true||b?.verified!==true)return 0;return b.coverage-a.coverage||b.handUtilization-a.handUtilization||b.nonWispUsefulValue-a.nonWispUsefulValue||a.actualChoiceSpent-b.actualChoiceSpent||a.actualConsumedReferenceValue-b.actualConsumedReferenceValue;}
     function choose(plans,context){let best=null;for(const plan of list(plans)){if(!plan?.executable)continue;const fit=assess({...context,plan});if(!best||compare(fit,best.fit)<0)best={plan,fit};}return best;}
-    return {preselectionScore,assess,compare,choose};
+    // valueOf·ancestors는 역할 추천의 남은 조합 비용 계산에도 쓴다.
+    return {preselectionScore,assess,compare,choose,valueOf:code=>valueOf(code),ancestors:code=>ancestors(code)};
   }
   function same(a,b){for(const key of new Set([...a.keys(),...b.keys()]))if(Math.abs((a.get(key)||0)-(b.get(key)||0))>eps)return false;return true;}
   return {create};

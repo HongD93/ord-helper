@@ -48,6 +48,11 @@ if ($LASTEXITCODE -ne 0) { throw "부분 명단 검사 실패`n$rosterOutput" }
 $rosterResult = $rosterOutput | ConvertFrom-Json
 if ($rosterResult.passed -ne $rosterResult.total -or $rosterResult.total -lt 1) { throw '부분 명단 검사 결과 불일치' }
 
+$roleOutput = & node (Join-Path $root 'source/ord-unit-probe/recommendation/role-advisor.test.js') | Out-String
+if ($LASTEXITCODE -ne 0) { throw "역할 추천 검사 실패`n$roleOutput" }
+$roleResult = $roleOutput | ConvertFrom-Json
+if ($roleResult.passed -ne $roleResult.total -or $roleResult.total -lt 1) { throw '역할 추천 검사 결과 불일치' }
+
 $localMergeOutput = & node (Join-Path $root 'source/ord-unit-probe/recommendation/local-clear-live-merge.test.js') | Out-String
 if ($LASTEXITCODE -ne 0) { throw "자동 클리어 추천 연결 검사 실패`n$localMergeOutput" }
 $localMerge = $localMergeOutput | ConvertFrom-Json
@@ -64,6 +69,7 @@ if ($localMerge.passed -ne $localMerge.total -or $localMerge.total -lt 1) { thro
     localClearRegressionChecks = $localClear.passed
     randomUnitRegressionChecks = $randomModuleChecks
     partialRosterRegressionChecks = $rosterResult.passed
+    roleAdvisorChecks = $roleResult.passed
     automaticClearMergeChecks = $localMerge.passed
     runtimeDataRequired = $false
     gameInputSent = $false

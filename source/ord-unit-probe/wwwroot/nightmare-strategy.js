@@ -1,10 +1,11 @@
 (function(root,factory){
   const api=factory(typeof module==="object"&&module.exports?require("./recipe-graph.js"):root.OrdRecipeGraph,typeof module==="object"&&module.exports?require("./nightmare-records.js"):root.OrdNightmareRecords,typeof module==="object"&&module.exports?require("./nightmare-reward-budget.js"):root.OrdNightmareRewardBudget,typeof module==="object"&&module.exports?require("./nightmare-random-forecast.js"):root.OrdNightmareRandomForecast,typeof module==="object"&&module.exports?require("./nightmare-combat-verifier.js"):root.OrdNightmareCombatVerifier,typeof module==="object"&&module.exports?require("./nightmare-support-adaptation.js"):root.OrdNightmareSupportAdaptation,typeof module==="object"&&module.exports?require("./nightmare-early-story.js"):root.OrdNightmareEarlyStory,typeof module==="object"&&module.exports?require("./nightmare-hand-fit.js"):root.OrdNightmareHandFit,typeof module==="object"&&module.exports?require("./nightmare-reinforcements.js"):root.OrdNightmareReinforcements,typeof module==="object"&&module.exports?require("./nightmare-brulee.js"):root.OrdNightmareBrulee,
     typeof module==="object"&&module.exports?require("./nightmare-utility-targets.js"):root.OrdNightmareUtilityTargets,
-    typeof module==="object"&&module.exports?require("./nightmare-line-damage.js"):root.OrdNightmareLineDamage);
+    typeof module==="object"&&module.exports?require("./nightmare-line-damage.js"):root.OrdNightmareLineDamage,
+    typeof module==="object"&&module.exports?require("./nightmare-role-advisor.js"):root.OrdNightmareRoleAdvisor);
   if(typeof module==="object"&&module.exports)module.exports=api;
   root.OrdNightmareStrategy=api;
-})(typeof globalThis!=="undefined"?globalThis:this,function(Graph,Records,RewardBudget,RandomForecast,CombatVerifier,SupportAdaptation,EarlyStory,HandFit,Reinforcements,Brulee,UtilityTargets,LineDamage){
+})(typeof globalThis!=="undefined"?globalThis:this,function(Graph,Records,RewardBudget,RandomForecast,CombatVerifier,SupportAdaptation,EarlyStory,HandFit,Reinforcements,Brulee,UtilityTargets,LineDamage,RoleAdvisor){
   "use strict";
   const finite=x=>typeof x==="number"&&Number.isFinite(x);
   const unique=xs=>Array.from(new Set(xs.filter(Boolean)));
@@ -151,6 +152,53 @@
       const required=Array.from(needed.values()).reduce((sum,count)=>sum+count,0);
       return {maximum:1,required,valid:required<=1,units:Array.from(needed,([rawcode,count])=>({rawcode,count}))};
     };
+    // 보유 패 기준 역할 추천(2026-11-28): 클리어 기록 덱 대신 주딜과 역할 유닛 목표를 만든다(콰트로 미션은 기존 방식).
+    // 조합 비용은 패 적합 모듈의 UNIT 원가에서 지금 패가 덮는 조상 재료 원가를 뺀 값이다(덱 사전 점수와 같은 기준).
+    const roleAdvisor=options.roleRecommendations===true&&RoleAdvisor?RoleAdvisor.create(options.roleProfile,catalog):null;
+    const roleCost=roleAdvisor&&HandFit?HandFit.create(catalog,{recipeGraph:graph}):null;
+    const roleElders={warcury:"워큐리",saturn:"새턴",nasujuro:"나스쥬로"},roleSignatures=new Map();
+    function roleRemainingCost(code,inventory){
+      const value=roleCost.valueOf(code);if(value===null)return null;
+      const demand=roleCost.ancestors(code);let used=0;
+      for(const [raw,count]of inventory)if(count>0&&demand.has(raw)){const each=roleCost.valueOf(raw);if(each!==null)used+=Math.min(count,demand.get(raw))*each;}
+      return Math.max(0,value-Math.min(value,used));
+    }
+    function roleTemplates(inventory,settings){
+      if(!roleAdvisor||typeof roleCost?.valueOf!=="function")return [];
+      const allowed=settings.supportedRecipeIds==null?null:new Set(Array.from(settings.supportedRecipeIds,String));
+      // 특수 조건(SPEC: 모건·폭시·블고리 등 특수 유닛)으로만 만드는 유닛은 조건을 채울 수 있는지 알 수 없어 새로 만들 후보에서 뺀다(보유하면 후보).
+      const freeRecipe=recipe=>!(recipe.ingredients||[]).some(item=>String(item?.type).toUpperCase()==="SPEC");
+      const producible=code=>Array.from(recipes.values()).some(recipe=>Graph.isProductionRecipe(recipe)&&recipe.resultUnitRawcode===code&&freeRecipe(recipe)&&(!allowed||allowed.has(String(recipe.id))));
+      const elder=["selected","active"].includes(settings.elder?.status)?roleElders[settings.elder?.id]||null:null;
+      const ownedUpper=Array.from(inventory).filter(([code,count])=>count>0&&RoleAdvisor.upperTiers.has(units.get(code)?.tier)).reduce((sum,[,count])=>sum+count,0);
+      const limit=settings.kingPathEntryCompatibility?.selectionLimit;
+      const upperLimit=limit===0?ownedUpper:limit===1?Math.max(1,ownedUpper):Infinity;
+      const candidates=[];
+      for(const code of units.keys()){
+        const unit=units.get(code);
+        if(!roleAdvisor.unit(code)||unit?.playable!==true||unit.isSummon===true||excludedSummons.has(code)||!includeMysteriousDecks&&mysterious(code))continue;
+        if(!((inventory.get(code)||0)>0)&&!producible(code))continue;
+        // 보유해야만 만들 수 있는 재료(2.331 희귀 레일리 등)가 없는 후보는 뺀다(초반 스토리 추천과 같은 확인).
+        if(requiredOwnedMaterialsAvailable?.([{rawcode:code,count:1}],inventory,settings.protectedCounts)===false)continue;
+        const cost=roleRemainingCost(code,inventory);if(cost!==null)candidates.push({rawcode:code,cost});
+      }
+      const groups=[{rawcodes:Object.keys(transcendenceCapacity.slotCosts),maximum:transcendenceCapacity.maximum}];
+      const base=roleAdvisor.recommend({counts:inventory,candidates,elder,upperLimit,limitedGroups:groups});
+      // 주딜 대안: 가진 상위가 없으면 조합 비용이 낮은 주딜 후보 둘을 더 계산해 사용자가 고를 수 있게 한다.
+      const mains=[base.main,...(base.mainReason==="fastest"?candidates.filter(row=>row.rawcode!==base.main&&roleAdvisor.mainEligible(row.rawcode)).sort((a,b)=>a.cost-b.cost).slice(0,2).map(row=>row.rawcode):[])].filter(Boolean);
+      return mains.map((main,index)=>{
+        const result=index===0?base:roleAdvisor.recommend({counts:inventory,candidates,elder,upperLimit,limitedGroups:groups,main});
+        const name=(units.get(main)?.displayName||units.get(main)?.name||main)+" 중심 역할 추천";
+        // 같은 주딜이라도 역할 유닛이 바뀌면 목표 해석 캐시(resolved)를 지운다.
+        const signature=result.picks.map(pick=>pick.rawcode).join("|");
+        if(roleSignatures.get("role:"+main)!==signature){roleSignatures.set("role:"+main,signature);resolved.delete("role:"+main);}
+        return {id:"role:"+main,name,direction:result.direction,coreGoals:[{rawcode:main,count:1}],recordPresenceGoals:true,
+          supportSlots:result.picks.map((pick,slot)=>({id:"role-"+slot,roles:pick.roles,count:1,preferredRawcodes:[pick.rawcode],required:true})),
+          sourceEvidence:{kind:"role_recommendation",main,mainReason:index===0?result.mainReason:"alternative",elder,direction:result.direction,
+            picks:result.picks,before:{metrics:result.before.metrics,gaps:result.before.gaps},after:{metrics:result.after.metrics,gaps:result.after.gaps},threshold:result.after.threshold,
+            recordIds:[],urls:[],clearVerified:false}};
+      });
+    }
     const nativeMap=Boolean(hash&&hash===combat.map?.sha256),rulesMap=Boolean(hash&&hash===rules.map?.sha256);
     const resolved=new Map(),goalContexts=new Map();let selectedId=null,session=null,firstInvestmentRawcode=null,progressCache=new Map();
     let lastRecommendation=null,lastRecommendationKey=null,feasibilityEvidenceContext=null;const feasibilityEvidence=new Map();
@@ -274,7 +322,8 @@
       const fixedGoals=Array.from(goals.values()).map(g=>({...g,slots:g.slots.slice()})),prunedIntermediateLegends=[],prunedIntermediateHiddenSeeds=[];
       for(const goal of fixedGoals){
         // 실클리어 원본에 함께 등록된 보조 유닛은 상위의 재료라는 이유로 삭제하지 않는다.
-        if(recordOnly&&["clear_record","record_support_adaptation"].includes(template.sourceEvidence?.kind))continue;
+        // 역할 추천 유닛도 상위의 재료라는 이유로 지우지 않는다(역할을 채우려고 고른 최종 유닛이다).
+        if(recordOnly&&["clear_record","record_support_adaptation"].includes(template.sourceEvidence?.kind)||template.sourceEvidence?.kind==="role_recommendation")continue;
         const seedHidden=goal.rawcode===firstInvestmentRawcode&&units.get(goal.rawcode)?.tier==="히든";
         if(units.get(goal.rawcode)?.tier!=="전설"&&!seedHidden)continue;
         // 명시적인 native 지원 슬롯은 상위 제작분과 별개로 끝까지 남기는 추가 수량이다.
@@ -1247,7 +1296,7 @@
       }
       const usingRecords=Boolean([...(recordSet?.templates||[]),...(recordSet?.missingRandomTemplates||[])].some(t=>(settings.direction==null||settings.direction==="all"||settings.direction===t.direction)&&(includeKingPathDecks||!kingPathDependent(resolve(t,inventory,settings),t))));
       let templates=recordOnly?(recordSet?.templates||[]).filter(template=>Records?.originalClearTemplate?.(template,catalog)===true):usingRecords?[...recordSet.templates,...(recordSet.alternatives||[])]:fallbackTemplates;
-      const missingRandomBases=(recordSet?.missingRandomTemplates||[]).filter(template=>Records?.originalClearTemplate?.(template,catalog)===true&&
+      let missingRandomBases=(recordSet?.missingRandomTemplates||[]).filter(template=>Records?.originalClearTemplate?.(template,catalog)===true&&
         (includeKingPathDecks||!kingPathDependent(resolve(template,inventory,settings),template))&&(includeMysteriousDecks||!mysteriousDependent(template)));
       if(!includeKingPathDecks)templates=templates.filter(template=>!kingPathDependent(resolve(template,inventory,settings),template));
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
@@ -1281,6 +1330,9 @@
         templates=[...templates,...variants];
       }
       if(!includeMysteriousDecks)templates=templates.filter(template=>!mysteriousDependent(template));
+      // 역할 추천이 켜져 있으면 클리어 기록 덱 대신 역할 목표 덱을 쓴다(콰트로 미션은 기존 방식). 주딜이 없으면 기존 덱을 그대로 둔다.
+      const roleDecks=!includeQuattroMission?roleTemplates(inventory,settings):[];
+      if(roleDecks.length){templates=roleDecks;missingRandomBases=[];}
       const holdingQuattroDeck=includeQuattroMission&&craftRunning&&lastSelectedTemplate?.id===selectedId;
       if(!nativeMap&&!historicalRosterOnly||counts==null||!templates.length&&!(supportAdapter&&missingRandomBases.length)&&!holdingQuattroDeck||typeof graph.planDeck!=="function"){
         const reinforcements=(nativeMap||supportCombat===utility)&&counts!=null&&typeof graph.planDeck==="function"?reinforcementAdvisor?.recommend(inventory,{...settings,rewardBudget:activeRewardBudget},{}):null;
@@ -1362,7 +1414,7 @@
         (!(t.availableWhen?.ownedAnyRawcodes||[]).length||t.availableWhen.ownedAnyRawcodes.some(c=>(inventory.get(c)||0)>=(t.availableWhen.minimumCount||1)));
       const capacityAllowed=t=>transcendenceState(resolve(t,inventory,settings).goals,inventory).valid;
       const recordSourceAllowed=template=>{
-        if(!recordOnly||Records?.originalClearTemplate?.(template,catalog)===true)return true;
+        if(!recordOnly||Records?.originalClearTemplate?.(template,catalog)===true||template.sourceEvidence?.kind==="role_recommendation"&&roleAdvisor)return true;
         const original=adaptationBases.get(template.sourceEvidence?.baseTemplateId)||(template===busyTemplate?lastSelectedSupportBase:null);
         return Boolean(supportAdapter&&original&&Records.originalClearTemplate(original,catalog)&&supportAdapter.isAdaptation(template,original));
       };
