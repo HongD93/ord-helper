@@ -183,21 +183,27 @@
         const cost=roleRemainingCost(code,inventory);if(cost!==null)candidates.push({rawcode:code,cost});
       }
       const groups=[{rawcodes:Object.keys(transcendenceCapacity.slotCosts),maximum:transcendenceCapacity.maximum}];
-      const base=roleAdvisor.recommend({counts:inventory,candidates,elder,upperLimit,limitedGroups:groups});
-      // 주딜 대안: 가진 상위가 없으면 조합 비용이 낮은 주딜 후보 둘을 더 계산해 사용자가 고를 수 있게 한다.
-      const mains=[base.main,...(base.mainReason==="fastest"?candidates.filter(row=>row.rawcode!==base.main&&roleAdvisor.mainEligible(row.rawcode)).sort((a,b)=>a.cost-b.cost).slice(0,2).map(row=>row.rawcode):[])].filter(Boolean);
-      return mains.map((main,index)=>{
-        const result=index===0?base:roleAdvisor.recommend({counts:inventory,candidates,elder,upperLimit,limitedGroups:groups,main});
-        const name=(units.get(main)?.displayName||units.get(main)?.name||main)+" 중심 역할 추천";
-        // 같은 주딜이라도 역할 유닛이 바뀌면 목표 해석 캐시(resolved)를 지운다.
-        const signature=result.picks.map(pick=>pick.rawcode).join("|");
-        if(roleSignatures.get("role:"+main)!==signature){roleSignatures.set("role:"+main,signature);resolved.delete("role:"+main);}
-        return {id:"role:"+main,name,direction:result.direction,coreGoals:[{rawcode:main,count:1}],recordPresenceGoals:true,
-          supportSlots:result.picks.map((pick,slot)=>({id:"role-"+slot,roles:pick.roles,count:1,preferredRawcodes:[pick.rawcode],required:true})),
-          sourceEvidence:{kind:"role_recommendation",main,mainReason:index===0?result.mainReason:"alternative",elder,direction:result.direction,
-            picks:result.picks,before:{metrics:result.before.metrics,gaps:result.before.gaps},after:{metrics:result.after.metrics,gaps:result.after.gaps},threshold:result.after.threshold,
-            recordIds:[],urls:[],clearVerified:false}};
-      });
+      // 단계별 추천: 덱 전체가 아니라 지금 만들 한 단계(주딜이 없으면 주딜, 있으면 가장 부족한 역할의 유닛 1기)만 목표로 둔다.
+      // 후보 묶음(pool)은 보강 자동 칸에도 넘기므로 조합 경로가 없는 후보를 감안해 넉넉히 받는다.
+      const step=roleAdvisor.nextStep({counts:inventory,candidates,elder,upperLimit,limitedGroups:groups,poolSize:7});
+      const nameOf=code=>units.get(code)?.displayName||units.get(code)?.name||code;
+      const summary=assessment=>({metrics:assessment.metrics,gaps:assessment.gaps});
+      const evidence=fields=>({kind:"role_recommendation",elder,recordIds:[],urls:[],clearVerified:false,...fields});
+      if(step.phase==="main"){
+        // 주딜 후보(가장 빨리 만드는 순서로 최대 3개)를 각각 하나의 목표로 두어 사용자가 고를 수 있게 한다. 지표는 지금 보유 유닛 기준이다.
+        return step.mainCandidates.map((row,index)=>{
+          const main=row.rawcode,direction=roleAdvisor.unit(main)?.direction,current=roleAdvisor.assess(inventory,{elder,direction});
+          return {id:"role:"+main,name:nameOf(main)+" 주딜",direction:current.direction,coreGoals:[{rawcode:main,count:1}],recordPresenceGoals:true,supportSlots:[],
+            sourceEvidence:evidence({phase:"main",main,mains:[main],mainReason:index===0?"fastest":"alternative",direction:current.direction,role:null,picks:[],pool:[],current:summary(current),threshold:current.threshold})};
+        });
+      }
+      const id="role:"+step.mains.join("+"),signature=step.pick?.rawcode||"";
+      // 같은 주딜이라도 다음 역할 유닛이 바뀌면 목표 해석 캐시(resolved)를 지운다.
+      if(roleSignatures.get(id)!==signature){roleSignatures.set(id,signature);resolved.delete(id);}
+      return [{id,name:step.mains.map(nameOf).join("·")+" 다음 역할",direction:step.current.direction,coreGoals:step.mains.map(code=>({rawcode:code,count:1})),recordPresenceGoals:true,
+        supportSlots:step.pick?[{id:"role-0",roles:step.pick.roles,count:1,preferredRawcodes:[step.pick.rawcode],required:true}]:[],
+        sourceEvidence:evidence({phase:step.phase,main:step.mains[0],mains:step.mains,mainReason:"owned",direction:step.current.direction,role:step.role,picks:step.pick?[step.pick]:[],pool:step.pool,
+          current:summary(step.current),threshold:step.current.threshold})}];
     }
     const nativeMap=Boolean(hash&&hash===combat.map?.sha256),rulesMap=Boolean(hash&&hash===rules.map?.sha256);
     const resolved=new Map(),goalContexts=new Map();let selectedId=null,session=null,firstInvestmentRawcode=null,progressCache=new Map();
@@ -1511,7 +1517,7 @@
       if(copy)target.craftTargets=[];
       const publicRecommendations=deduplicateAlternatives(candidates.filter(deck=>deck.kingPathConstraint?.entryCompatibility?.status!=="blocked"),target,catalog);
       const reinforcementTargetGoals=target?goalContexts.get(target.id)?.roster.fixedGoals:undefined;
-      const reinforcements=reinforcementAdvisor?.recommend(inventory,{...settings,rewardBudget:activeRewardBudget},{mode:target?.mode,targetGoals:reinforcementTargetGoals,targetBasis:target?{deckId:target.id,kind:target.sourceEvidence?.kind||null,recordIds:target.sourceEvidence?.recordIds||[],mapSha256:hash,clearSufficiencyEstablished:false}:null,activeCoreRawcodes:target?.coreRawcodes||[],requiredSupportCounts:Object.fromEntries((target?.goals||[]).filter(goal=>goal.kind==="support"&&(inventory.get(goal.rawcode)||0)>0&&["areaStun","alwaysSlow","armorReduction","magicResistanceReduction","manaSupport"].some(kind=>supports(goal.rawcode,kind).length)).map(goal=>[goal.rawcode,Math.min(goal.count,inventory.get(goal.rawcode))]))});
+      const reinforcements=reinforcementAdvisor?.recommend(inventory,{...settings,rewardBudget:activeRewardBudget},{mode:target?.mode,targetGoals:reinforcementTargetGoals,targetBasis:target?{deckId:target.id,kind:target.sourceEvidence?.kind||null,recordIds:target.sourceEvidence?.recordIds||[],mapSha256:hash,clearSufficiencyEstablished:false}:null,activeCoreRawcodes:target?.coreRawcodes||[],...(target?.sourceEvidence?.kind==="role_recommendation"?{roleStep:{phase:target.sourceEvidence.phase,role:target.sourceEvidence.role,rawcodes:(Array.isArray(target.sourceEvidence.pool)?target.sourceEvidence.pool:[]).map(row=>row.rawcode).filter(raw=>!(target.sourceEvidence.picks||[]).some(pick=>pick.rawcode===raw))}}:{}),requiredSupportCounts:Object.fromEntries((target?.goals||[]).filter(goal=>goal.kind==="support"&&(inventory.get(goal.rawcode)||0)>0&&["areaStun","alwaysSlow","armorReduction","magicResistanceReduction","manaSupport"].some(kind=>supports(goal.rawcode,kind).length)).map(goal=>[goal.rawcode,Math.min(goal.count,inventory.get(goal.rawcode))]))});
       return {schemaVersion:1,targetDeck:target,transcendenceLimit:{...transcendenceState(target?.goals,inventory),excludedDeckCount:allTemplates.length-allowed.length},recordDataReevaluation:{revision:recordDataRevision,changed:recordsChanged,performed:recordsRecompare,pending:Boolean(pendingClearRecords)},kingPathPreferenceReevaluation:{mode:kingPathMode,included:includeKingPathDecks,changed:kingPathPreferenceChanged,performed:kingPathPreferenceRecompare,selectedActualLeo:kingPathTargetSelected,pending:pendingKingPathPreferenceReplan||pendingKingPathTargetSelection,entryCompatibility:settings.kingPathEntryCompatibility},randomForecast,randomHistoryReevaluation:{confirmedChange:randomHistoryChanged,performed:randomRecompare,pending:pendingRandomHistoryReplan},rewardBudget:activeRewardBudget,rewardBudgetReevaluation:{confirmedChange:rewardBudgetChanged,performed:budgetRecompare,pending:pendingRewardBudgetReplan},recipeConditionReevaluation:{confirmedChange:confirmedConditionsChanged,performed:conditionRecompare,pending:pendingRecipeConditionReplan,avoidedBlockedAutomatic:blockedAutomatic},feasibilitySelection:{automatic,blockedDeckCount:candidates.filter(deck=>deck.recommendationFeasibility.status==="blocked").length,conditionalDeckCount:candidates.filter(deck=>deck.recommendationFeasibility.status==="conditional").length,noEligibleAutomaticTarget:automatic&&!target},stockInventoryReevaluation:{changed:stockChanged,performed:stockRecompare,changedTarget:stockReplanned,retainedTie,pending:pendingStockRecompare,incumbentCompared:Boolean(incumbent),comparedIncumbentId:incumbent?.id||null},firstInvestmentReevaluation:{pending:pendingFirstInvestmentReplan,performedThisUpdate:firstInvestmentReplanned,reason:firstInvestmentReplanReason},itemInventoryReevaluation:{confirmedChange:itemsChanged,performedThisUpdate:itemReplanned,pending:pendingItemReplan,manualChoiceRespected:itemsChanged&&Boolean(settings.preferredDeckId)&&settings.manualDeckChoice!==false},craftTargets:target?.craftTargets||[],goalCraftTargets:target?.goalCraftTargets||[],order:target?.order||[],selectedDeckId:selectedId,alternatives:publicRecommendations.alternatives,recommendationDeduplication:{policy:"direction_and_original_final_composition",groupCount:publicRecommendations.groupCount,hiddenDuplicateCount:publicRecommendations.duplicateCount},ownedOpportunities,
         mysteriousPreferenceReevaluation:{requested:requestedIncludeMysteriousDecks,included:includeMysteriousDecks,changed:mysteriousPreferenceChanged,pending:requestedIncludeMysteriousDecks!==includeMysteriousDecks},
         recommendationRebase:rebaseInfo?{...rebaseInfo,selectedDeckId:selectedId,performedThisUpdate:upperRebase,deferredNewUpperRawcodes:Array.from(deferredUpper.keys())}:null,

@@ -152,7 +152,7 @@
     };
     // 주딜은 초월·불멸·영원·제한급 최상위(자료 mainTiers, 신비는 신비함을 켠 경우만 후보로 들어온다)에서 단독 라인 시간이 기준 이하인 유닛이다.
     const mainTiers=new Set(Array.isArray(data.mainTiers)&&data.mainTiers.length?data.mainTiers:upperTiers);
-    const mainEligible=code=>mainTiers.has(tierOf(code))&&finite(soloLine(code))&&soloLine(code)<=(data.mainLineSecondsLimit||360);
+    const mainEligible=code=>Boolean(units[code])&&mainTiers.has(tierOf(code))&&finite(soloLine(code))&&soloLine(code)<=(data.mainLineSecondsLimit||360);
     // 덱 방향: 방깎 158 라인 처리 속도를 물딜·마딜로 나눠 큰 쪽.
     function directionOf(counts){
       let physical=0,magic=0;
@@ -183,57 +183,50 @@
       return {elder,direction,metrics,threshold,gaps,score:Object.values(gaps).reduce((sum,value)=>sum+value,0)};
     }
 
-    // 추천: 주딜을 정하고 부족분을 줄이는 양 / 조합 비용이 큰 유닛을 하나씩 더한다.
+    // 단계별 추천(2026-11-29): 앞으로 나올 패를 알 수 없으므로 덱 전체를 정하지 않고 지금 할 한 단계만 고른다.
+    // - 주딜(주딜 조건을 채우는 상위 유닛)이 없으면 지금 패에서 가장 빨리 만드는 주딜 후보만 고른다(역할 유닛은 고르지 않는다).
+    // - 주딜이 있으면(여러 기여도 된다) 지금 보유 유닛을 기준과 비교해 가장 부족한 역할 하나를 고르고,
+    //   그 역할을 의미 있게 줄이는 유닛 중 남은 조합 비용이 가장 낮은 유닛을 고른다. 라인딜이 가장 부족하면 같은 방향의 다른 주딜급 딜러도 후보다.
     // candidates: [{rawcode,cost}] (cost는 지금 패 기준 남은 조합 비용, 호출 쪽 계산). 이미 가진 유닛은 counts에 있다.
-    function recommend(options){
+    const roleOrder=["bossKiller","line","stun","slow","armor","boss","enraged"];
+    function nextStep(options){
       const counts=countsOf(options?.counts),candidates=(options?.candidates||[]).filter(row=>typeof row?.rawcode==="string"&&finite(row.cost)&&row.cost>=0&&units[row.rawcode]);
-      const upperLimit=Number.isSafeInteger(options?.upperLimit)?options.upperLimit:Infinity,maxPicks=Number.isSafeInteger(options?.maxPicks)?options.maxPicks:8;
-      // 유닛 하나는 덱 자리(인구)를 차지하므로 조합 비용에 자리 비용을 더하고, 부족분을 조금만 줄이는 유닛은 고르지 않는다.
+      const upperLimit=Number.isSafeInteger(options?.upperLimit)?options.upperLimit:Infinity,poolSize=Number.isSafeInteger(options?.poolSize)&&options.poolSize>0?options.poolSize:3;
+      // 유닛 하나는 덱 자리(인구)를 차지하므로 비용에 자리 비용을 더하고, 그 역할을 조금만 줄이는 유닛은 고르지 않는다.
       const slotCost=finite(options?.slotCost)&&options.slotCost>=0?options.slotCost:8,minimumGain=finite(options?.minimumGain)&&options.minimumGain>=0?options.minimumGain:.05;
       const upperCount=deck=>Array.from(deck).filter(([code])=>upperTiers.has(tierOf(code))).reduce((sum,[,count])=>sum+count,0);
       // 묶음당 최대 수(예: 초월 영웅과 니카는 덱 전체 1기). 이미 가진 수까지 센다.
       const groups=(options?.limitedGroups||[]).map(group=>({set:new Set(group?.rawcodes||[]),maximum:Number.isSafeInteger(group?.maximum)?group.maximum:Infinity}));
-      const groupAllows=(deck,code)=>groups.every(group=>!group.set.has(code)||Array.from(deck).filter(([other])=>group.set.has(other)).reduce((sum,[,count])=>sum+count,0)+1<=group.maximum);
-      let main=options?.main&&units[options.main]?options.main:null,mainReason=main?"chosen":null;
-      if(!main){
-        const owned=Array.from(counts.keys()).filter(mainEligible).sort((a,b)=>soloLine(a)-soloLine(b));
-        if(owned.length){main=owned[0];mainReason="owned";}
+      const groupAllows=code=>groups.every(group=>!group.set.has(code)||Array.from(counts).filter(([other])=>group.set.has(other)).reduce((sum,[,count])=>sum+count,0)+1<=group.maximum);
+      const allowed=row=>!counts.has(row.rawcode)&&groupAllows(row.rawcode)&&(!upperTiers.has(tierOf(row.rawcode))||upperCount(counts)+1<=upperLimit);
+      const elder=options?.elder,mains=Array.from(counts.keys()).filter(mainEligible).sort((a,b)=>soloLine(a)-soloLine(b));
+      if(!mains.length){
+        const ranked=candidates.filter(row=>mainEligible(row.rawcode)&&allowed(row)).sort((a,b)=>a.cost-b.cost||soloLine(a.rawcode)-soloLine(b.rawcode));
+        return {phase:"main",mains:[],role:null,pick:null,pool:[],mainCandidates:ranked.slice(0,poolSize).map(row=>({rawcode:row.rawcode,cost:row.cost}))};
       }
-      if(!main){
-        const ranked=candidates.filter(row=>mainEligible(row.rawcode)&&groupAllows(counts,row.rawcode)&&(upperTiers.has(tierOf(row.rawcode))?upperCount(counts)+1<=upperLimit:true)).sort((a,b)=>a.cost-b.cost||soloLine(a.rawcode)-soloLine(b.rawcode));
-        if(ranked.length){main=ranked[0].rawcode;mainReason="fastest";}
+      // 방향(물딜·마딜 기준)은 가진 주딜들의 라인 처리 속도로 정한다.
+      const settings={elder,main:mains[0],direction:directionOf(new Map(mains.map(code=>[code,counts.get(code)])))};
+      const current=assess(counts,settings),trials=new Map();
+      const trial=code=>{if(!trials.has(code)){const deck=new Map(counts);deck.set(code,1);trials.set(code,assess(deck,settings));}return trials.get(code);};
+      const roles=Object.keys(current.gaps).filter(key=>current.gaps[key]>1e-9).sort((a,b)=>current.gaps[b]-current.gaps[a]||roleOrder.indexOf(a)-roleOrder.indexOf(b));
+      const usable=candidates.filter(allowed);
+      // 딜 역할(라인·보스·광폭화)은 덱 방향과 같은 딜러만 후보로 둔다(물딜 덱의 방깎은 마딜에 의미가 없다). 이감·스턴·방깎·보잡 역할은 방향을 가리지 않는다.
+      const damageRoles=new Set(["line","boss","enraged"]),sameDirection=row=>!units[row.rawcode]?.direction||units[row.rawcode].direction===current.direction;
+      // 단일·끝딜은 필수 역할이 아니다. 마딜 덱에 아직 없으면 단일·끝딜 유닛의 비용을 조금 낮게 본다(마딜 보조에 단일·끝딜이 많다).
+      const prefer=code=>current.direction==="magic"&&!(current.metrics.finisherOrSingle>0)&&(units[code]?.finisher||units[code]?.single)&&stunTiers.has(tierOf(code))?1.15:1;
+      for(const role of roles){
+        const rows=(damageRoles.has(role)?usable.filter(sameDirection):usable).map(row=>{const after=trial(row.rawcode);return {...row,roleGain:current.gaps[role]-after.gaps[role],gain:current.score-after.score,after};}).filter(row=>row.roleGain>=minimumGain);
+        if(!rows.length)continue;
+        const strongest=Math.max(...rows.map(row=>row.roleGain));
+        const pool=rows.filter(row=>row.roleGain>=Math.max(minimumGain,strongest*.3))
+          .sort((a,b)=>(a.cost+slotCost)/prefer(a.rawcode)-(b.cost+slotCost)/prefer(b.rawcode)||b.roleGain-a.roleGain||b.gain-a.gain||a.rawcode.localeCompare(b.rawcode));
+        const entry=row=>({rawcode:row.rawcode,cost:row.cost,gain:Number(row.roleGain.toFixed(4)),roles:[role]});
+        return {phase:"role",mains,role,current,after:pool[0].after,pick:entry(pool[0]),pool:pool.slice(0,poolSize).map(entry),mainCandidates:[]};
       }
-      const deck=new Map(counts);
-      if(main&&!deck.has(main))deck.set(main,1);
-      // 방향은 주딜을 따른다(역할 유닛을 더해도 물딜·마딜 기준이 바뀌지 않게).
-      const settings={elder:options?.elder,main,direction:main?units[main]?.direction:undefined};
-      const before=assess(counts,settings);
-      let current=assess(deck,settings);
-      const picks=[];
-      for(let step=0;step<maxPicks&&current.score>1e-9;step+=1){
-        let best=null;
-        for(const row of candidates){
-          if(deck.has(row.rawcode)||picks.some(pick=>pick.rawcode===row.rawcode))continue;
-          if(upperTiers.has(tierOf(row.rawcode))&&upperCount(deck)+1>upperLimit)continue;
-          if(!groupAllows(deck,row.rawcode))continue;
-          const trial=new Map(deck);trial.set(row.rawcode,1);
-          const after=assess(trial,settings),gain=current.score-after.score;
-          if(!(gain>=minimumGain))continue;
-          // 단일·끝딜은 필수 역할이 아니다. 마딜 덱에 아직 없으면 같은 조건에서 단일·끝딜 유닛을 조금 먼저 고른다(마딜 보조에 단일·끝딜이 많다).
-          const prefer=current.direction==="magic"&&!(current.metrics.finisherOrSingle>0)&&(units[row.rawcode]?.finisher||units[row.rawcode]?.single)&&stunTiers.has(tierOf(row.rawcode))?1.15:1;
-          const value=gain*prefer/(row.cost+slotCost);
-          if(!best||value>best.value)best={rawcode:row.rawcode,cost:row.cost,gain,value,after};
-        }
-        if(!best)break;
-        const roles=Object.keys(current.gaps).filter(key=>best.after.gaps[key]<current.gaps[key]-1e-9);
-        picks.push({rawcode:best.rawcode,cost:best.cost,gain:Number(best.gain.toFixed(4)),roles});
-        deck.set(best.rawcode,1);current=best.after;
-      }
-      const goals=[...(main&&!counts.has(main)?[{rawcode:main,count:1,role:"main"}]:[]),...picks.map(pick=>({rawcode:pick.rawcode,count:1,role:pick.roles[0]||"support"}))];
-      return {main,mainReason,direction:current.direction,before,after:current,picks,goals};
+      return {phase:"done",mains,role:null,current,after:current,pick:null,pool:[],mainCandidates:[]};
     }
 
-    return {teamTime,assess,recommend,areaEffects,mainEligible,soloLine,unit:code=>units[code]||null};
+    return {teamTime,assess,nextStep,areaEffects,mainEligible,soloLine,unit:code=>units[code]||null};
   }
   return {create,upperTiers};
 });
