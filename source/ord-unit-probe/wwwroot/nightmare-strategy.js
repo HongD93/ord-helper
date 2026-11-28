@@ -169,6 +169,20 @@
       // 특수 조건(SPEC: 모건·폭시·블고리 등 특수 유닛)으로만 만드는 유닛은 조건을 채울 수 있는지 알 수 없어 새로 만들 후보에서 뺀다(보유하면 후보).
       const freeRecipe=recipe=>!(recipe.ingredients||[]).some(item=>String(item?.type).toUpperCase()==="SPEC");
       const producible=code=>Array.from(recipes.values()).some(recipe=>Graph.isProductionRecipe(recipe)&&recipe.resultUnitRawcode===code&&freeRecipe(recipe)&&(!allowed||allowed.has(String(recipe.id))));
+      // 갖고 있지 않은 랜덤전용 등 예측할 수 없는 재료가 모든 조합 경로에 꼭 필요한 후보는 뺀다(예: 신비 샌즈의 랜덤전용 재료).
+      // 그런 후보를 목표로 두면 목표 덱이 제작 불가로 막혀 고를 덱이 없어진다.
+      const routesOf=new Map();for(const recipe of recipes.values())if(Graph.isProductionRecipe(recipe)){if(!routesOf.has(recipe.resultUnitRawcode))routesOf.set(recipe.resultUnitRawcode,[]);routesOf.get(recipe.resultUnitRawcode).push(recipe);}
+      const unforecastableMemo=new Map();
+      const needsUnforecastable=(code,path=new Set())=>{
+        if((inventory.get(code)||0)>0)return false;
+        if(nonForecastable.has(code))return true;
+        if(unforecastableMemo.has(code))return unforecastableMemo.get(code);
+        if(path.has(code)||path.size>64)return false;
+        const next=new Set(path).add(code),routes=routesOf.get(code)||[];
+        const result=routes.length>0&&routes.every(recipe=>(recipe.ingredients||[]).some(item=>String(item?.type).toUpperCase()==="UNIT"&&
+          [item.rawcode,...(Array.isArray(item.acceptedRawcodes)?item.acceptedRawcodes:[])].filter(Boolean).every(raw=>needsUnforecastable(raw,next))));
+        unforecastableMemo.set(code,result);return result;
+      };
       const elder=["selected","active"].includes(settings.elder?.status)?roleElders[settings.elder?.id]||null:null;
       const ownedUpper=Array.from(inventory).filter(([code,count])=>count>0&&RoleAdvisor.upperTiers.has(units.get(code)?.tier)).reduce((sum,[,count])=>sum+count,0);
       const limit=settings.kingPathEntryCompatibility?.selectionLimit;
@@ -177,7 +191,7 @@
       for(const code of units.keys()){
         const unit=units.get(code);
         if(!roleAdvisor.unit(code)||unit?.playable!==true||unit.isSummon===true||excludedSummons.has(code)||!includeMysteriousDecks&&mysterious(code))continue;
-        if(!((inventory.get(code)||0)>0)&&!producible(code))continue;
+        if(!((inventory.get(code)||0)>0)&&(!producible(code)||needsUnforecastable(code)))continue;
         // 보유해야만 만들 수 있는 재료(2.331 희귀 레일리 등)가 없는 후보는 뺀다(초반 스토리 추천과 같은 확인).
         if(requiredOwnedMaterialsAvailable?.([{rawcode:code,count:1}],inventory,settings.protectedCounts)===false)continue;
         const cost=roleRemainingCost(code,inventory);if(cost!==null)candidates.push({rawcode:code,cost});
