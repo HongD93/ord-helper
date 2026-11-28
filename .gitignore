@@ -41,6 +41,7 @@
 !/source/ord-unit-probe/wwwroot/data/unit-resource-skills-2.331.json
 !/source/ord-unit-probe/wwwroot/data/nightmare-story-speed-2.331.json
 !/source/ord-unit-probe/wwwroot/data/nightmare-line-clear-2.331.json
+!/source/ord-unit-probe/wwwroot/data/nightmare-role-profile-2.331.json
 **/wwwroot/assets/
 **/wwwroot/nightmare-records-live-*.json
 **/wwwroot/nightmare-records-live-manifest.json

@@ -5,6 +5,8 @@ const elders={warcury:"워큐리",saturn:"새턴",nasujuro:"나스쥬로"};
 const itemNames={AI00:"우타의 헤드셋",AI01:"태양신의 흔적",AI02:"불사조의 깃털"};
 const nextTiers=new Set(["희귀","전설","히든","초월","불멸","제한","영원","신비","특수","변화","왜곡","세라핌"]);
 const finalTiers=new Set(["초월","불멸","영원","제한","신비","왜곡","변화","세라핌"]);
+// 목표 유닛은 초월·불멸·영원·제한급 최상위를 맨 앞에 둔다(역할 추천 덱은 주딜이 가장 앞).
+const topTiers=new Set(["초월","불멸","영원","제한","신비"]);
 const list=value=>Array.isArray(value)?value:[];
 const nextCraft=result=>list(result?.craftTargets).find(target=>nextTiers.has(target.tier)&&target.playable!==false&&target.isSummon!==true);
 const text=value=>typeof value==="string"?value.trim():"";
@@ -52,7 +54,7 @@ function create(options){
  const doc=host.ownerDocument||root.document;
  const el=(tag,cls,value)=>{const node=doc.createElement(tag);if(cls)node.className=cls;if(value!==undefined)node.textContent=String(value);return node;};
  if(!doc.getElementById("ord-nightmare-panel-style")){
-  const style=el("style");style.id="ord-nightmare-panel-style";style.textContent=`.ord-na{margin:4px 3px 6px;padding:7px 8px;border:1px solid #ded6ed;border-radius:4px;background:#fff;color:#64596f;font-size:10px}.ord-na-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:6px}.ord-na-title{margin:0;font-size:11px;color:#6753ac}.ord-na-chip{padding:2px 6px;border-radius:3px;background:#eee8fb;color:#7c65a7;font-size:9px}.ord-na-select{margin-left:auto;max-width:350px;min-height:24px;padding:3px 6px;border:1px solid #ded5ea;background:#fff;color:#6f5d88;font:inherit}.ord-na-roster{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.ord-na-unit{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:3px 5px;padding:5px 6px;min-width:0;border:1px solid #e7e0ef;border-radius:3px;background:#faf8ff}.ord-na-number{grid-row:1 / span 2;color:#a697b4;font-variant-numeric:tabular-nums}.ord-na-name{padding:0;min-width:0;border:0;background:none;color:#665086;text-align:left;font:inherit;cursor:pointer;overflow-wrap:anywhere}.ord-na-name:disabled{cursor:default;color:#84788f}.ord-na-count{grid-column:2;font-size:9px;color:#a193ad}.ord-na-action{grid-column:3;grid-row:1 / span 2;padding:5px 8px;border:0;border-radius:3px;background:#6b55bd;color:#fff;font:inherit;cursor:pointer}.ord-na-action:disabled{background:#e9e3f0;color:#aa9cb7;cursor:default}.ord-na-owned{background:#f5faf6;border-color:#dce9df}.ord-na-owned .ord-na-count{color:#7d9a86}.ord-na-next{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #ece5f2}.ord-na-next-label{color:#8c7a9e}.ord-na-next-name{padding:0;border:0;background:none;color:#65479a;font:inherit;cursor:pointer}.ord-na-next-cost{color:#a18fae;font-size:9px}.ord-na-condition{margin-top:5px;color:#a18891;font-size:9px}.ord-na-condition summary{cursor:pointer}.ord-na-condition ul{margin:4px 0;padding-left:15px;line-height:1.5}.ord-na-status{margin-top:5px;color:#96859e;line-height:1.5}.ord-na-status[data-tone=error]{color:#af566a}.ord-na-empty{padding:4px 0;color:#a093ad}.ord-na button:focus-visible,.ord-na select:focus-visible,.ord-na summary:focus-visible{outline:2px solid #9f89da;outline-offset:2px}@media(max-width:1000px){.ord-na-roster{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.ord-na-roster{grid-template-columns:repeat(2,minmax(0,1fr))}.ord-na-select{max-width:100%;margin-left:0}}@media(max-width:420px){.ord-na-roster{grid-template-columns:1fr}}`;
+  const style=el("style");style.id="ord-nightmare-panel-style";style.textContent=`.ord-na{margin:4px 3px 6px;padding:7px 8px;border:1px solid #ded6ed;border-radius:4px;background:#fff;color:#64596f;font-size:10px}.ord-na-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:6px}.ord-na-title{margin:0;font-size:11px;color:#6753ac}.ord-na-chip{padding:2px 6px;border-radius:3px;background:#eee8fb;color:#7c65a7;font-size:9px}.ord-na-role{display:flex;flex-wrap:wrap;gap:5px;margin:-2px 0 6px}.ord-na-chip.ord-na-short{background:#fbe8ee;color:#a5506b}.ord-na-select{margin-left:auto;max-width:350px;min-height:24px;padding:3px 6px;border:1px solid #ded5ea;background:#fff;color:#6f5d88;font:inherit}.ord-na-roster{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.ord-na-unit{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:3px 5px;padding:5px 6px;min-width:0;border:1px solid #e7e0ef;border-radius:3px;background:#faf8ff}.ord-na-number{grid-row:1 / span 2;color:#a697b4;font-variant-numeric:tabular-nums}.ord-na-name{padding:0;min-width:0;border:0;background:none;color:#665086;text-align:left;font:inherit;cursor:pointer;overflow-wrap:anywhere}.ord-na-name:disabled{cursor:default;color:#84788f}.ord-na-count{grid-column:2;font-size:9px;color:#a193ad}.ord-na-action{grid-column:3;grid-row:1 / span 2;padding:5px 8px;border:0;border-radius:3px;background:#6b55bd;color:#fff;font:inherit;cursor:pointer}.ord-na-action:disabled{background:#e9e3f0;color:#aa9cb7;cursor:default}.ord-na-owned{background:#f5faf6;border-color:#dce9df}.ord-na-owned .ord-na-count{color:#7d9a86}.ord-na-next{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #ece5f2}.ord-na-next-label{color:#8c7a9e}.ord-na-next-name{padding:0;border:0;background:none;color:#65479a;font:inherit;cursor:pointer}.ord-na-next-cost{color:#a18fae;font-size:9px}.ord-na-condition{margin-top:5px;color:#a18891;font-size:9px}.ord-na-condition summary{cursor:pointer}.ord-na-condition ul{margin:4px 0;padding-left:15px;line-height:1.5}.ord-na-status{margin-top:5px;color:#96859e;line-height:1.5}.ord-na-status[data-tone=error]{color:#af566a}.ord-na-empty{padding:4px 0;color:#a093ad}.ord-na button:focus-visible,.ord-na select:focus-visible,.ord-na summary:focus-visible{outline:2px solid #9f89da;outline-offset:2px}@media(max-width:1000px){.ord-na-roster{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:700px){.ord-na-roster{grid-template-columns:repeat(2,minmax(0,1fr))}.ord-na-select{max-width:100%;margin-left:0}}@media(max-width:420px){.ord-na-roster{grid-template-columns:1fr}}`;
   style.textContent+=".ord-na-unit{grid-template-columns:18px minmax(0,1fr) auto auto}.ord-na-unit-state{grid-column:4;grid-row:1 / span 2;padding:5px 7px;border-radius:3px;background:#e9e3f0;color:#aa9cb7}.ord-na-owned .ord-na-unit-state{background:#e5f1e8;color:#7d9a86}";
   style.textContent+=".ord-na-name{position:relative;isolation:isolate;min-height:19px;border-radius:2px;padding:2px 3px}.ord-na-progress{position:absolute;inset:0;z-index:-1;overflow:hidden;border-radius:2px;background:#eeeaf5}.ord-na-progress-current,.ord-na-progress-choice{position:absolute;inset:0 auto 0 0;opacity:.28;background:#2fa467}.ord-na-progress-choice{background:#f4ca43}.ord-na-progress-choice[data-ready=true]{background:#e75c66}";
   style.textContent+=".ord-na-controls{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-left:auto;max-width:100%}.ord-na-controls .ord-na-select{margin-left:0}.ord-na-toggle{min-height:24px;padding:3px 7px;border:1px solid #ded5ea;border-radius:3px;background:#fff;color:#8d7d9e;font:inherit;cursor:pointer}.ord-na-toggle[aria-pressed=true]{border-color:#7d67bd;background:#eee8fb;color:#6246a2}";
@@ -225,7 +227,7 @@ function create(options){
   const result=state.result,deck=result?.targetDeck,head=el("div","ord-na-head");head.append(el("h2","ord-na-title","목표 덱"));
   appendStop(head);
   if(lanes[deck?.mode])head.append(el("span","ord-na-chip",lanes[deck.mode]));
-  const evidenceLabels={clear_record:"클리어 기록 기반",role_similar_alternative:"기록의 역할 대체",native_fallback:"역할 구성 기반"};
+  const evidenceLabels={clear_record:"클리어 기록 기반",role_similar_alternative:"기록의 역할 대체",native_fallback:"역할 구성 기반",role_recommendation:"역할 추천"};
   if(evidenceLabels[deck?.sourceEvidence?.kind])head.append(el("span","ord-na-chip",evidenceLabels[deck.sourceEvidence.kind]));
   const combatValidation=deck?.combatValidation,combatLabels={risk_detected:"전투 보강 권장",conditional_model:"전투 조건부 평가",evidence_limited:"전투 근거 일부 확인",role_incomplete:"필수 역할 부족",unknown:"전투 평가 미확인",unavailable:"전투 자료 확인 필요"};
   if(combatValidation)head.append(el("span","ord-na-chip",combatLabels[combatValidation.status]||"전투 평가 미확인"));
@@ -275,8 +277,23 @@ function create(options){
    if(state.error&&options.onRetry){const retry=el("button","ord-na-name","다시 계산");retry.type="button";retry.addEventListener("click",()=>options.onRetry());panel.append(retry);}
    renderReinforcements(result);return;
   }
+  // 역할 추천: 덱의 역할 지표를 같은 방향 클리어 기록 중앙값과 나란히 보이고, 모자란 항목을 구분한다.
+  const role=deck.sourceEvidence?.kind==="role_recommendation"?deck.sourceEvidence:null;
+  const roleNames={main:"주딜",line:"라인",boss:"보스",enraged:"광폭화",slow:"이감",stun:"스턴",armor:"방깎",bossKiller:"보잡"};
+  const roleOf=new Map(role?[[role.main,["main"]],...list(role.picks).map(pick=>[pick.rawcode,list(pick.roles)])]:[]);
+  if(role){
+   const metrics=role.after?.metrics||{},threshold=role.threshold||{},gaps=role.after?.gaps||{},line=el("div","ord-na-role");
+   const chip=(key,value)=>{if(value)line.append(el("span","ord-na-chip"+(gaps[key]>0?" ord-na-short":""),value));};
+   const seconds=key=>finite(metrics[key])&&finite(threshold[key]?.median)?roleNames[key]+" "+metrics[key].toFixed(1)+"/"+threshold[key].median.toFixed(1)+"초":null;
+   chip("line",seconds("line"));chip("boss",seconds("boss"));chip("enraged",seconds("enraged"));
+   if(finite(metrics.slow)&&finite(threshold.slow?.median))chip("slow","이감 "+Math.round(metrics.slow)+"/"+Math.round(threshold.slow.median)+"%");
+   if(finite(metrics.stunUptime)&&finite(threshold.stunUptime?.median))chip("stun","스턴 "+Math.round(metrics.stunUptime*100)+"/"+Math.round(threshold.stunUptime.median*100)+"%");
+   if(deck.direction==="physical"||role.direction==="physical")if(finite(metrics.armor)&&finite(threshold.armor?.median))chip("armor","방깎 "+Math.round(metrics.armor)+"/"+Math.round(threshold.armor.median));
+   chip("bossKiller",gaps.bossKiller>0?"보잡 없음":null);
+   if(line.childNodes?.length!==0)panel.append(line);
+  }
   const brulee=bruleeAction(result),order=list(result.order).map(item=>typeof item==="string"?item:item.rawcode),positions=new Map(order.map((item,index)=>[item,index+1]));
-  const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
+  const cores=new Set(list(deck.coreRawcodes)),goalOrder=goal=>[role&&goal.rawcode===role.main?0:1,topTiers.has(goal.tier)?0:1,finalTiers.has(goal.tier)?0:1,cores.has(goal.rawcode)?0:1,Number(goal.owned)>0?0:1,positions.get(goal.rawcode)||999];
   const goals=list(deck.goals).slice().sort((a,b)=>{const x=goalOrder(a),y=goalOrder(b);for(let i=0;i<x.length;i++)if(x[i]!==y[i])return x[i]-y[i];return 0;});
   const grid=el("div","ord-na-roster");
   for(const [displayIndex,goal] of goals.entries()){
@@ -291,12 +308,14 @@ function create(options){
     name.append(track,el("span","",Math.round(percent)+"% "+unitName));name.title="현재 "+Math.round(percent)+"% · 선택 위습 사용 시 "+Math.round(reachable)+"%";
    }else name.textContent=unitName;
    name.type="button";name.disabled=typeof options.onOpenUnit!=="function";name.setAttribute("aria-label",unitName+" 상세");name.addEventListener("click",()=>{if(!destroyed&&!name.disabled)options.onOpenUnit(goal.rawcode);});
-   row.append(el("span","ord-na-number",displayIndex+1),name,el("span","ord-na-count","보유 "+owned+" / "+required));
+   const roleText=roleOf.has(goal.rawcode)?roleOf.get(goal.rawcode).map(key=>roleNames[key]).filter(Boolean).join("·"):"";
+   row.append(el("span","ord-na-number",displayIndex+1),name,el("span","ord-na-count","보유 "+owned+" / "+required+(roleText?" · "+roleText:"")));
    if(!done){const action=el("button","ord-na-action","조합");action.type="button";action.disabled=!enabled(target);action.setAttribute("aria-label",unitName+" 조합");action.title=enabled(target)?"필요한 재료부터 "+unitText(goal,text(goal.name)||"목표 유닛")+"까지 조합":"현재는 조합할 수 없습니다.";action.addEventListener("click",()=>request(target,goal.rawcode));row.append(action);}
    row.append(el("span","ord-na-unit-state",done?"보유":"대기"));grid.append(row);
   }
   panel.append(grid);
-  renderGoalCombat(deck.assessment);
+  // 역할 추천 덱은 위의 역할 지표가 같은 내용을 새 계산으로 보이므로 기존 오라·라인딜 요약은 숨긴다.
+  if(!role)renderGoalCombat(deck.assessment);
   if(combatValidation){
    const summary=el("div","ord-na-next-cost","전투 평가 · 딜 "+combatState(combatValidation.damage)+" · 스턴 "+combatState(combatValidation.control?.stun)+" · 이감 "+combatState(combatValidation.control?.slow)+" · 마나·회복 "+combatState(combatValidation.mana));
    summary.title=combatTooltip(combatValidation,deck);
