@@ -54,58 +54,73 @@ test('a main without boss damage leaves a boss killer gap until one is added',()
   assert.equal(advisor.assess(deck({H0B5:1}),{main:'H0B5'}).gaps.bossKiller,1);
   assert.equal(advisor.assess(deck({H0B5:1,h045:1}),{main:'H0B5'}).gaps.bossKiller,0);
 });
-test('the main is the chosen upper, then an owned upper, then the cheapest eligible candidate',()=>{
+test('without an owned main only the fastest main candidates are offered, no role units',()=>{
   assert.equal(advisor.mainEligible('h05W'),false);
-  const chosen=advisor.recommend({counts:{H09F:1},main:'H0B5',candidates:[]});
-  assert.equal(chosen.main,'H0B5');assert.equal(chosen.mainReason,'chosen');
-  const owned=advisor.recommend({counts:{H09F:1},candidates:[{rawcode:'H0B5',cost:1}]});
-  assert.equal(owned.main,'H09F');assert.equal(owned.mainReason,'owned');
-  const fastest=advisor.recommend({counts:{},candidates:[{rawcode:'h05W',cost:1},{rawcode:'H09F',cost:9},{rawcode:'H0B5',cost:4}],maxPicks:0});
-  assert.equal(fastest.main,'H0B5');assert.equal(fastest.mainReason,'fastest');
-  assert.deepEqual(fastest.goals,[{rawcode:'H0B5',count:1,role:'main'}]);
+  const step=advisor.nextStep({counts:{},candidates:[{rawcode:'h05W',cost:1},{rawcode:'H09F',cost:9},{rawcode:'H0B5',cost:4},{rawcode:'h045',cost:0}]});
+  assert.equal(step.phase,'main');
+  assert.deepEqual(step.mainCandidates.map(row=>row.rawcode),['H0B5','H09F']);
+  assert.equal(step.pick,null);assert.deepEqual(step.pool,[]);
 });
-test('role picks reduce the gaps and respect the upper limit',()=>{
+test('with an owned main the next step fills the largest gap with the cheapest meaningful unit',()=>{
   const candidates=['h045','h03V','h03O','h0A1','h081','H09F','H0B4'].map((rawcode,index)=>({rawcode,cost:2+index}));
-  const result=advisor.recommend({counts:{H0B5:1},candidates,elder:'새턴',maxPicks:4});
-  assert(result.picks.length>=1);
-  assert(result.after.score<result.before.score);
-  for(const pick of result.picks)assert(pick.gain>0&&pick.roles.length>=1);
-  const limited=advisor.recommend({counts:{H0B5:1},candidates,elder:'새턴',maxPicks:6,upperLimit:1});
-  assert(!limited.picks.some(pick=>Advisor.upperTiers.has(catalog.units.find(unit=>unit.rawcode===pick.rawcode)?.tier)));
-  assert(result.goals.every(goal=>goal.count===1&&typeof goal.role==='string'));
+  const step=advisor.nextStep({counts:{H0B5:1},candidates,elder:'새턴'});
+  assert.equal(step.phase,'role');assert.deepEqual(step.mains,['H0B5']);
+  const largest=Math.max(...Object.values(step.current.gaps));
+  assert.equal(step.current.gaps[step.role],largest);
+  assert(step.after.gaps[step.role]<step.current.gaps[step.role]);
+  assert.deepEqual(step.pick.roles,[step.role]);assert(step.pick.gain>=.05);
+  assert.equal(step.pool[0].rawcode,step.pick.rawcode);assert(step.pool.length<=3);
+  // 부족분을 의미 있게 줄이는 후보 중에서는 남은 조합 비용이 낮은 쪽이 먼저다.
+  for(let index=1;index<step.pool.length;index+=1)assert(step.pool[index-1].cost<=step.pool[index].cost);
+  const limited=advisor.nextStep({counts:{H0B5:1},candidates,elder:'새턴',upperLimit:1});
+  assert(!Advisor.upperTiers.has(data.units[limited.pick.rawcode].tier));
 });
-test('the physical or magic standard follows the main while role units are added',()=>{
+test('several mains can be owned and another main-tier dealer can be the next pick for line damage',()=>{
+  const both=advisor.nextStep({counts:{H09F:1,H0B5:1},candidates:[{rawcode:'h045',cost:2}],elder:'새턴'});
+  assert.deepEqual(new Set(both.mains),new Set(['H09F','H0B5']));
+  const all=Object.keys(data.units).filter(code=>!data.units[code].skinOf).map(rawcode=>({rawcode,cost:10}));
+  const step=advisor.nextStep({counts:{H0B5:1},candidates:all,elder:'새턴'});
+  assert.equal(step.role,'line');assert(advisor.mainEligible(step.pick.rawcode));
+});
+test('damage roles only take dealers of the deck direction',()=>{
+  assert.equal(advisor.unit('H09A').direction,'physical');
+  const all=Object.keys(data.units).filter(code=>!data.units[code].skinOf).map(rawcode=>({rawcode,cost:10}));
+  const step=advisor.nextStep({counts:{H09A:1},candidates:all,elder:'나스쥬로'});
+  assert.equal(step.current.direction,'physical');
+  assert(['line','boss','enraged'].includes(step.role),'the largest gap of a lone main is a damage role');
+  for(const row of step.pool)assert.notEqual(data.units[row.rawcode].direction,'magic',row.rawcode);
+});
+test('the physical or magic standard follows the owned mains',()=>{
   assert.equal(advisor.unit('H09F').direction,'physical');
   const candidates=['H0B4','H08X','h0A1','h03O'].map(rawcode=>({rawcode,cost:1}));
-  const result=advisor.recommend({counts:{H09F:1},candidates,elder:'나스쥬로',maxPicks:4});
-  assert.equal(result.direction,'physical');assert.equal(result.after.direction,'physical');assert.equal(result.before.direction,'physical');
-  assert.equal(result.after.threshold,data.thresholds.byElder['나스쥬로'].physical);
+  const step=advisor.nextStep({counts:{H09F:1},candidates,elder:'나스쥬로'});
+  assert.equal(step.current.direction,'physical');assert.equal(step.after.direction,'physical');
+  assert.equal(step.current.threshold,data.thresholds.byElder['나스쥬로'].physical);
 });
 test('candidates without a finite craft cost are never picked',()=>{
-  const result=advisor.recommend({counts:{H0B5:1},candidates:[{rawcode:'h045',cost:Infinity},{rawcode:'h03V',cost:null}],maxPicks:3});
-  assert.equal(result.picks.length,0);
+  const step=advisor.nextStep({counts:{H0B5:1},candidates:[{rawcode:'h045',cost:Infinity},{rawcode:'h03V',cost:null}]});
+  assert.equal(step.pick,null);assert.equal(step.phase,'done');
 });
 test('a limited group such as one transcendence hero is never exceeded',()=>{
   const heroes=Object.keys(data.units).filter(code=>/^H/.test(code)&&data.units[code].tier==='초월');
   const candidates=heroes.slice(0,12).map(rawcode=>({rawcode,cost:1}));
-  const result=advisor.recommend({counts:{H09F:1},candidates,elder:'새턴',maxPicks:6,limitedGroups:[{rawcodes:heroes,maximum:1}]});
-  assert(!result.picks.some(pick=>heroes.includes(pick.rawcode)));
-  const empty=advisor.recommend({counts:{},candidates,elder:'새턴',maxPicks:6,limitedGroups:[{rawcodes:heroes,maximum:1}]});
-  assert(heroes.includes(empty.main));
-  assert(!empty.picks.some(pick=>heroes.includes(pick.rawcode)));
+  const step=advisor.nextStep({counts:{H09F:1},candidates,elder:'새턴',limitedGroups:[{rawcodes:heroes,maximum:1}]});
+  assert.equal(step.pick,null);
+  const empty=advisor.nextStep({counts:{},candidates,elder:'새턴',limitedGroups:[{rawcodes:heroes,maximum:1}]});
+  assert(empty.mainCandidates.length>=1&&empty.mainCandidates.every(row=>heroes.includes(row.rawcode)));
 });
-test('each pick pays a deck slot cost and must reduce the gaps enough',()=>{
+test('a pick must reduce its role gap enough',()=>{
   const candidates=[{rawcode:'h0A1',cost:40},{rawcode:'h03O',cost:20}];
-  const loose=advisor.recommend({counts:{H0B5:1},candidates,elder:'새턴',minimumGain:0,slotCost:0});
-  const strict=advisor.recommend({counts:{H0B5:1},candidates,elder:'새턴',minimumGain:10});
-  assert(loose.picks.length>=1);assert.equal(strict.picks.length,0);
+  const loose=advisor.nextStep({counts:{H0B5:1},candidates,elder:'새턴',minimumGain:0,slotCost:0});
+  const strict=advisor.nextStep({counts:{H0B5:1},candidates,elder:'새턴',minimumGain:10});
+  assert(loose.pick);assert.equal(strict.pick,null);
 });
 test('the main comes from the top tiers only and special units count like legend for stuns',()=>{
   assert.equal(advisor.unit('h09Y').tier,'세라핌');
   assert(advisor.soloLine('h09Y')<=data.mainLineSecondsLimit);
   assert.equal(advisor.mainEligible('h09Y'),false);
-  const picked=advisor.recommend({counts:{},candidates:[{rawcode:'h09Y',cost:1},{rawcode:'H0B5',cost:50}],maxPicks:0});
-  assert.equal(picked.main,'H0B5');
+  const picked=advisor.nextStep({counts:{},candidates:[{rawcode:'h09Y',cost:1},{rawcode:'H0B5',cost:50}]});
+  assert.deepEqual(picked.mainCandidates.map(row=>row.rawcode),['H0B5']);
   assert(data.stunTiers.includes('특수'));
   const special=Object.keys(data.units).find(code=>data.units[code].tier==='특수');
   const copy=JSON.parse(JSON.stringify(data));copy.units[special].effects=[['stun',2,2,.5,0]];
@@ -186,8 +201,8 @@ test('deck buffs and the elder change trigger rates, and a finisher is a role li
   const copy=JSON.parse(JSON.stringify(data));
   copy.units.zzz1={...JSON.parse(JSON.stringify(data.units.h03Q)),finisher:true};copy.units.zzz2=JSON.parse(JSON.stringify(data.units.h03Q));delete copy.units.zzz2.finisher;delete copy.units.zzz2.single;
   const local=Advisor.create(copy,{...catalog,units:[...catalog.units,{rawcode:'zzz1',tier:'히든',playable:true},{rawcode:'zzz2',tier:'히든',playable:true}]});
-  const picked=local.recommend({counts:{[noFinisher]:1},main:noFinisher,candidates:[{rawcode:'zzz2',cost:10},{rawcode:'zzz1',cost:10}],maxPicks:1});
-  assert.equal(picked.picks[0]?.rawcode,'zzz1');
+  const picked=local.nextStep({counts:{[noFinisher]:1},candidates:[{rawcode:'zzz2',cost:10},{rawcode:'zzz1',cost:10}]});
+  assert.equal(picked.pick?.rawcode,'zzz1');
 });
 
 const report={passed:tests.filter(row=>row.passed).length,total:tests.length,tests};console.log(JSON.stringify(report,null,2));if(report.passed!==report.total)process.exitCode=1;

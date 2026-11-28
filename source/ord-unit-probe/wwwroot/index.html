@@ -296,7 +296,7 @@ function usefulUnit(unit){
 
 function allVisibleUnits(){
   const query=byId("search").value.trim().toLocaleLowerCase("ko"),known=liveCounts!==null;
-  return Array.from(unitByCode.values()).filter(unit=>unit.visible&&usefulUnit(unit)&&!hiddenTiers.has(unit.tier)&&
+  return Array.from(unitByCode.values()).filter(unit=>unit.visible&&usefulUnit(unit)&&!hiddenTiers.has(unit.boardTier||unit.tier)&&
     (!query||compactName(unit).toLocaleLowerCase("ko").includes(query)||unit.rawcode.toLowerCase().includes(query))&&
     (!known||!byId("owned-only").checked||(amount(unit.rawcode)||0)>0)&&
     (!known||!byId("materials-only").checked||isReady(unit.rawcode)));
@@ -904,12 +904,18 @@ async function loadCatalog(){
     const roleBoard=roleProfile?.schemaVersion===1&&roleProfile.catalogMapHash===data.map?.sha256&&roleProfile.units?roleProfile:null;
     if(roleBoard){
       const roleKinds={"물딜":"physical","마딜":"magic","스턴":"stun","보조":null},roleOrder=["물딜","스턴","마딜","보조"],tierOrder=new Map(canonicalTiers.map((tier,index)=>[tier.id,index])),groups=new Map();
+      // 조합식 없이 교환·도박으로 얻는 유닛(레일리·고대의 배·초월 쿠마·꾸러미 상자)은 기타 칸에 둔다.
+      const otherBoardUnits=new Set(["h05X","h05Y","h04S","h0BR"]);
+      // 스킬 소환물(요크·후샤·완두콩·백설콩·먹깨비·해바라기·제우스 번개·붉은갸라도스)과 셀 필요 없는 보관형 유닛(사랑의 도시락·선물상자·망가진 장난감)은 보드에 두지 않는다.
+      const hiddenBoardUnits=new Set(["H0AM","h08K","h08P","h09J","h09O","h09P","h0AJ","h0C6","h0CN","h0CG","h07H"]);
+      const removeFromTier=unit=>{const list=unitsByTier.get(unit.tier);if(list)unitsByTier.set(unit.tier,list.filter(other=>other!==unit));};
       data.damageDirectionHints={};
       for(const unit of unitByCode.values()){
         const info=Object.prototype.hasOwnProperty.call(roleBoard.units,unit.rawcode)?roleBoard.units[unit.rawcode]:null;
         if(unit.boardDisplay)unit.boardDisplay={...unit.boardDisplay,groupName:null};
         // 스킨(맵의 스킨 적용 유닛)은 보드에서 뺀다. 보유하면 추천 계산에는 그대로 센다.
-        if(info?.skinOf){unit.visible=false;const list=unitsByTier.get(unit.tier);if(list)unitsByTier.set(unit.tier,list.filter(other=>other!==unit));continue;}
+        if(info?.skinOf||hiddenBoardUnits.has(unit.rawcode)){unit.visible=false;removeFromTier(unit);continue;}
+        if(otherBoardUnits.has(unit.rawcode)&&unit.visible){removeFromTier(unit);unit.boardTier="other";if(!unitsByTier.has("other"))unitsByTier.set("other",[]);unitsByTier.get("other").push(unit);continue;}
         if(info&&(info.direction==="physical"||info.direction==="magic")&&unit.visible&&unit.playable===true)data.damageDirectionHints[unit.rawcode]=info.direction;
         if(!unit.visible||!Object.prototype.hasOwnProperty.call(roleKinds,info?.board))continue;
         const name=(tierSettings.get(unit.tier)?.label||unit.tier)+" ["+info.board+"]";
